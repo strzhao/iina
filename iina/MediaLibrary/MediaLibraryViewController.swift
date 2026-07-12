@@ -30,9 +30,19 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
 
   // MARK: State
 
-  private var displayedItems: [MediaItem] = []
-  private var currentCategory: MediaCategory = .movie
-  private var currentFilter: String = ""
+  // Internal (not private) so @testable acceptance tests can verify state invariants
+  // (see tests/MediaLibraryViewControllerCategorySwitch.acceptance.test.swift).
+  var displayedItems: [MediaItem] = []
+  /// When non-empty (TV-show category only), parallels `displayedItems`: each entry is the episode
+  /// count for the corresponding representative card. Empty for non-TV categories (per-episode cards).
+  var displayedGroupCounts: [Int] = []
+  var currentCategory: MediaCategory = .movie
+  var currentFilter: String = ""
+
+  /// Height constraint for `continueWatchingView`, toggled in `refresh()` so the strip doesn't
+  /// reserve 130pt when empty (Auto Layout keeps a hidden view's frame, so `isHidden` alone
+  /// would leave a blank gap at the top).
+  var continueWatchingHeightConstraint: NSLayoutConstraint!
 
   /// Called when a media item is double-clicked (open for playback).
   var onOpenItem: ((MediaItem) -> Void)?
@@ -105,11 +115,14 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
     errorLabel.isSelectable = true
     container.addSubview(errorLabel)
 
+    // Hold the continue-watching height so refresh() can collapse it to 0 when empty.
+    continueWatchingHeightConstraint = continueWatchingView.heightAnchor.constraint(equalToConstant: 130)
+
     NSLayoutConstraint.activate([
       continueWatchingView.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
       continueWatchingView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
       continueWatchingView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-      continueWatchingView.heightAnchor.constraint(equalToConstant: 130),
+      continueWatchingHeightConstraint,
 
       segmentedControl.topAnchor.constraint(equalTo: continueWatchingView.bottomAnchor, constant: 8),
       segmentedControl.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
@@ -191,11 +204,26 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
 
   /// Re-query the store and reload the grid + continue-watching strip.
   func refresh() {
-    displayedItems = MediaLibraryStore.shared.items(category: currentCategory, filter: currentFilter.isEmpty ? nil : currentFilter)
+    let store = MediaLibraryStore.shared
+    let cwItems = store.continueWatchingItems()
+    // Collapse the continue-watching strip when empty so it doesn't reserve 130pt of blank space.
+    continueWatchingHeightConstraint.constant = cwItems.isEmpty ? 0 : 130
+
+    let filter = currentFilter.isEmpty ? nil : currentFilter
+    if currentCategory == .tvShow {
+      // TV-show category: one representative card per show (collection layer), not per episode.
+      let groups = store.tvShowGroups(filter: filter)
+      displayedItems = groups.map(\.representative)
+      displayedGroupCounts = groups.map(\.episodeCount)
+    } else {
+      displayedItems = store.items(category: currentCategory, filter: filter)
+      displayedGroupCounts = []
+    }
+
     collectionView.reloadData()
-    continueWatchingView.update(with: MediaLibraryStore.shared.continueWatchingItems())
+    continueWatchingView.update(with: cwItems)
     if displayedItems.isEmpty {
-      emptyStateLabel.stringValue = MediaLibraryStore.shared.isScanning ? "扫描中…" : "没有媒体文件"
+      emptyStateLabel.stringValue = store.isScanning ? "扫描中…" : "没有媒体文件"
       emptyStateLabel.isHidden = false
     } else {
       emptyStateLabel.isHidden = true
@@ -207,8 +235,11 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
       switch mlError {
       case .pathNotAccessible:
         errorLabel.stringValue = "媒体库路径不可访问，请确认 NAS 已挂载或在设置中修改路径。"
-      case .scanFailed:
-        errorLabel.stringValue = "扫描目录时出错：\(error.localizedDescription)"
+      case .scanFailed(_, let underlying):
+        // Surface the underlying Cocoa I/O error — MediaLibraryError's default
+        // localizedDescription swallows it, leaving the user with a useless "错误1". Cached items
+        // are preserved on rescan failure, so tell the user the library is still usable.
+        errorLabel.stringValue = "扫描目录时出错（缓存仍可用）：\(underlying.localizedDescription)"
       }
     } else {
       errorLabel.stringValue = error.localizedDescription
@@ -232,7 +263,17 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
   func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
     let item = collectionView.makeItem(withIdentifier: MediaLibraryViewController.itemIdentifier, for: indexPath) as! MediaItemCollectionViewItem
     if let mediaItem = displayedItems[at: indexPath.item] {
-      item.configure(with: mediaItem, ignorePath: PlayerCore.activeOrNew.ignorePathInWatchLaterConfig)
+      let idx = indexPath.item
+      // TV-show collection mode: display the bare show name + episode-count badge.
+      if idx < displayedGroupCounts.count {
+        let displayName = mediaItem.tvShowId ?? mediaItem.cleanedName
+        item.configure(with: mediaItem,
+                       ignorePath: PlayerCore.activeOrNew.ignorePathInWatchLaterConfig,
+                       displayName: displayName,
+                       episodeCount: displayedGroupCounts[idx])
+      } else {
+        item.configure(with: mediaItem, ignorePath: PlayerCore.activeOrNew.ignorePathInWatchLaterConfig)
+      }
     }
     return item
   }

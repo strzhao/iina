@@ -114,3 +114,7 @@ browser/Firefox_Open_In_IINA/*
 deps/executable/youtube-dl
 deps/plugins
 
+# Autopilot（runtime 是本地产物，不入库；knowledge/ 入库共享）
+.autopilot/runtime/
+local-config.json
+

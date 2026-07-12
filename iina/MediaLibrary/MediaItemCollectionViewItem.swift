@@ -29,6 +29,9 @@ class MediaItemCollectionViewItem: NSCollectionViewItem {
   let progressIndicator = NSProgressIndicator()
   /// "Played" badge overlay (hidden by default).
   let playedBadge = NSTextField(labelWithString: "已看")
+  /// Episode-count badge for TV-show collection cards (e.g. "12集"). Top-left corner. Hidden by
+  /// default; shown when `configure(... episodeCount:)` is passed a non-nil value.
+  let episodeCountBadge = NSTextField(labelWithString: "")
 
   /// The media item represented by this card.
   private(set) var mediaItem: MediaItem?
@@ -83,6 +86,17 @@ class MediaItemCollectionViewItem: NSCollectionViewItem {
     playedBadge.isHidden = true
     container.addSubview(playedBadge)
 
+    // Episode-count badge (top-left), shown for TV-show collection cards.
+    episodeCountBadge.translatesAutoresizingMaskIntoConstraints = false
+    episodeCountBadge.font = NSFont.systemFont(ofSize: 10, weight: .semibold)
+    episodeCountBadge.textColor = NSColor.white
+    episodeCountBadge.alignment = .center
+    episodeCountBadge.wantsLayer = true
+    episodeCountBadge.layer?.cornerRadius = 4
+    episodeCountBadge.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.6).cgColor
+    episodeCountBadge.isHidden = true
+    container.addSubview(episodeCountBadge)
+
     NSLayoutConstraint.activate([
       thumbnailView.topAnchor.constraint(equalTo: container.topAnchor, constant: 4),
       thumbnailView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 4),
@@ -103,6 +117,10 @@ class MediaItemCollectionViewItem: NSCollectionViewItem {
       playedBadge.trailingAnchor.constraint(equalTo: thumbnailView.trailingAnchor, constant: -6),
       playedBadge.widthAnchor.constraint(equalToConstant: 36),
       playedBadge.heightAnchor.constraint(equalToConstant: 18),
+
+      episodeCountBadge.topAnchor.constraint(equalTo: thumbnailView.topAnchor, constant: 6),
+      episodeCountBadge.leadingAnchor.constraint(equalTo: thumbnailView.leadingAnchor, constant: 6),
+      episodeCountBadge.heightAnchor.constraint(equalToConstant: 18),
     ])
 
     view = container
@@ -117,25 +135,51 @@ class MediaItemCollectionViewItem: NSCollectionViewItem {
   // MARK: Configuration
 
   /// Configure the card with a media item. Triggers on-demand thumbnail generation.
-  func configure(with item: MediaItem, ignorePath: Bool) {
+  ///
+  /// - Parameters:
+  ///   - displayName: When non-nil, overrides `nameLabel` with this string (used by TV-show
+  ///     collection cards so the title is the bare show name rather than a representative
+  ///     episode's `cleanedName`). When nil, `nameLabel` shows `item.cleanedName` (legacy).
+  ///   - episodeCount: When non-nil, this card represents a TV-show collection: shows the
+  ///     "\(n)集" badge and hides the per-episode `progressIndicator` / `playedBadge`. When nil,
+  ///     legacy per-episode behavior applies.
+  func configure(with item: MediaItem, ignorePath: Bool,
+                 displayName: String? = nil, episodeCount: Int? = nil) {
     mediaItem = item
-    nameLabel.stringValue = item.cleanedName
+    nameLabel.stringValue = displayName ?? item.cleanedName
     thumbnailView.image = nil
     thumbnailToken &+= 1  // invalidate any in-flight stale callback
-    progressIndicator.isHidden = true
-    playedBadge.isHidden = true
 
-    // Progress from history.
-    if let progressSec = MediaLibraryStore.shared.progress(for: item),
-       let duration = item.duration ?? HistoryController.shared.history
-         .first(where: { $0.mpvMd5 == Utility.mpvWatchLaterMd5(item.url, ignorePath) })?
-         .duration.second,
-       duration > 0 {
-      let ratio = min(max(progressSec / duration, 0), 1)
-      progressIndicator.doubleValue = ratio
-      progressIndicator.isHidden = false
-      if ratio >= 0.95 {
-        playedBadge.isHidden = false
+    // TV-show collection mode: show episode-count badge, hide per-episode overlays.
+    let isCollection = episodeCount != nil
+    episodeCountBadge.isHidden = !isCollection
+    if isCollection, let n = episodeCount {
+      episodeCountBadge.stringValue = "\(n)集"
+      episodeCountBadge.sizeToFit()
+      // Keep a readable hit area after sizeToFit (height fixed by constraint; widen + pad).
+      let pad: CGFloat = 10
+      let fittedWidth = episodeCountBadge.cell?.cellSize.width ?? 0
+      episodeCountBadge.frame.size.width = fittedWidth + pad
+    }
+
+    if isCollection {
+      progressIndicator.isHidden = true
+      playedBadge.isHidden = true
+    } else {
+      progressIndicator.isHidden = true
+      playedBadge.isHidden = true
+      // Progress from history.
+      if let progressSec = MediaLibraryStore.shared.progress(for: item),
+         let duration = item.duration ?? HistoryController.shared.history
+           .first(where: { $0.mpvMd5 == Utility.mpvWatchLaterMd5(item.url, ignorePath) })?
+           .duration.second,
+         duration > 0 {
+        let ratio = min(max(progressSec / duration, 0), 1)
+        progressIndicator.doubleValue = ratio
+        progressIndicator.isHidden = false
+        if ratio >= 0.95 {
+          playedBadge.isHidden = false
+        }
       }
     }
 

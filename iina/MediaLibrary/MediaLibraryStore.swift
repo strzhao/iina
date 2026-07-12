@@ -8,6 +8,13 @@
 
 import Foundation
 
+/// A TV-show collection card: one representative `MediaItem` plus the total episode count.
+/// Used by the grid so that each show occupies a single card instead of one card per episode.
+struct TVShowGroup {
+  let representative: MediaItem
+  let episodeCount: Int
+}
+
 /// Singleton holding the scanned media library items, the persisted index, and query helpers
 /// (filtering, continue-watching, TV-show episodes).
 ///
@@ -74,7 +81,9 @@ final class MediaLibraryStore: NSObject {
   // MARK: Scan
 
   /// Trigger an asynchronous rescan of the root directory. Posts `scannedNotification` on the
-  /// main thread when complete (or on error, with an empty items list + the error in userInfo).
+  /// main thread when complete, or on error with the error in `userInfo`. On error the previously
+  /// cached items (from `loadIndex`) are preserved so a transient NAS I/O hiccup doesn't wipe the
+  /// whole library view.
   func rescan() {
     Logger.log("MediaLibraryStore.rescan start root=\(rootPath)", level: .warning)
     isScanning = true
@@ -94,9 +103,9 @@ final class MediaLibraryStore: NSObject {
         Logger.log("MediaLibraryStore.rescan error: \(error)", level: .error)
         DispatchQueue.main.async {
           self.isScanning = false
-          self.items = []
-          self.md5Index = [:]
-          self.tvShowIndex = [:]
+          // Keep cached items on transient scan failures — a flaky NAS I/O hiccup shouldn't wipe
+          // the whole library view. The error is still surfaced via the notification so the user
+          // knows the rescan didn't refresh.
           NotificationCenter.default.post(
             name: MediaLibraryStore.scannedNotification, object: self,
             userInfo: ["error": error])
@@ -109,6 +118,12 @@ final class MediaLibraryStore: NSObject {
   func setItems(_ newItems: [MediaItem]) {
     items = newItems
     rebuildIndices()
+  }
+
+  /// Test-only fixture: reset the store's items and rebuild indices. Equivalent to `setItems`,
+  /// named for test-fixture clarity so acceptance tests read intent. Main-thread only.
+  func setItemsForTesting(_ newItems: [MediaItem]) {
+    setItems(newItems)
   }
 
   private func rebuildIndices() {
@@ -196,6 +211,33 @@ final class MediaLibraryStore: NSObject {
       }
     }
     return best?.0
+  }
+
+  /// Group every TV show in `tvShowIndex` into one `TVShowGroup` per `tvShowId`.
+  ///
+  /// Representative selection: `lastWatchedEpisode(tvShowId:)` if any, else the first episode
+  /// (episodes are already sorted by `episodeNumber` in `rebuildIndices`). `episodeCount` is the
+  /// total number of episodes for that show (≥ 1).
+  ///
+  /// `filter`: nil or empty → all groups; otherwise case-insensitive `contains` against the
+  /// representative's `cleanedName`. Result sorted by `representative.cleanedName` ascending
+  /// (deterministic). Main-thread only; does not mutate `tvShowIndex` / `items`.
+  func tvShowGroups(filter: String?) -> [TVShowGroup] {
+    var groups: [TVShowGroup] = []
+    groups.reserveCapacity(tvShowIndex.count)
+    for (showId, episodes) in tvShowIndex {
+      guard !episodes.isEmpty else { continue }
+      let representative = lastWatchedEpisode(tvShowId: showId) ?? episodes[0]
+      // Defensive: the representative must carry the same tvShowId as the key.
+      guard representative.tvShowId == showId else { continue }
+      groups.append(TVShowGroup(representative: representative, episodeCount: episodes.count))
+    }
+    if let filter = filter, !filter.isEmpty {
+      let needle = filter.lowercased()
+      groups = groups.filter { $0.representative.cleanedName.lowercased().contains(needle) }
+    }
+    groups.sort { $0.representative.cleanedName < $1.representative.cleanedName }
+    return groups
   }
 
   /// Playback progress (seconds) for a media item, if recorded in history. 0/nil if none.
