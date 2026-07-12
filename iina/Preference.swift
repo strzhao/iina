@@ -369,11 +369,14 @@ struct Preference {
   // MARK: - Enums
 
   enum ActionAfterLaunch: Int, InitializingFromKey, CaseIterable {
-    case welcomeWindow = 0
+    /// Media library video wall — the app's home screen. Reuses rawValue=0 (previously
+    /// `welcomeWindow`) so existing user preferences transparently map to the new behavior
+    /// without migration.
+    case mediaLibrary = 0
     case openPanel
     case none
 
-    static var defaultValue = ActionAfterLaunch.welcomeWindow
+    static var defaultValue = ActionAfterLaunch.mediaLibrary
 
     init?(key: Key) {
       self.init(rawValue: Preference.integer(for: key))
@@ -381,7 +384,7 @@ struct Preference {
 
     var description: String {
       switch self {
-      case .welcomeWindow: "welcomeWindow"
+      case .mediaLibrary: "mediaLibrary"
       case .openPanel: "openPanel"
       case .none: "none"
       }
@@ -1015,7 +1018,7 @@ struct Preference {
 
   static let defaultPreference: [Preference.Key: Any] = [
     .receiveBetaUpdate: false,
-    .actionAfterLaunch: ActionAfterLaunch.welcomeWindow.rawValue,
+    .actionAfterLaunch: ActionAfterLaunch.mediaLibrary.rawValue,
     .alwaysOpenInNewWindow: true,
     .groupSimultaneousOpensInPlaylist: false,
     .allowDuplicatePlayers: false,

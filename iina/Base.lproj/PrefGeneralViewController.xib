@@ -45,12 +45,12 @@
                 </textField>
                 <popUpButton verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="bV8-LP-cwH">
                     <rect key="frame" x="189" y="597" width="188" height="24"/>
-                    <popUpButtonCell key="cell" type="push" title="Show welcome window" bezelStyle="rounded" alignment="left" lineBreakMode="truncatingTail" state="on" borderStyle="borderAndBezel" imageScaling="proportionallyDown" inset="2" selectedItem="z9T-8h-1T0" id="6y1-KS-0tJ">
+                    <popUpButtonCell key="cell" type="push" title="Show media library" bezelStyle="rounded" alignment="left" lineBreakMode="truncatingTail" state="on" borderStyle="borderAndBezel" imageScaling="proportionallyDown" inset="2" selectedItem="z9T-8h-1T0" id="6y1-KS-0tJ">
                         <behavior key="behavior" lightByBackground="YES" lightByGray="YES"/>
                         <font key="font" metaFont="message"/>
                         <menu key="menu" id="MId-eC-pMR">
                             <items>
-                                <menuItem title="Show welcome window" state="on" id="z9T-8h-1T0"/>
+                                <menuItem title="Show media library" state="on" id="z9T-8h-1T0"/>
                                 <menuItem title="Show open file panel" tag="1" id="1ce-4b-kgG"/>
                                 <menuItem title="Do nothing" tag="2" id="JfZ-D8-aF2"/>
                             </items>

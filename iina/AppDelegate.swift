@@ -448,14 +448,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
   private func showWelcomeWindow(checkingForUpdatedData: Bool = false) {
     let actionRawValue = Preference.integer(for: .actionAfterLaunch)
-    let action: Preference.ActionAfterLaunch = Preference.ActionAfterLaunch(rawValue: actionRawValue) ?? .welcomeWindow
+    let action: Preference.ActionAfterLaunch = Preference.ActionAfterLaunch(rawValue: actionRawValue) ?? .mediaLibrary
     switch action {
-    case .welcomeWindow:
-      let window = PlayerCore.first.initialWindow!
-      window.showWindow(nil)
+    case .mediaLibrary:
+      // The media library video wall is the app's home screen.
+      showMediaLibraryWindow(self)
       if checkingForUpdatedData {
-        window.loadLastPlaybackInfo()
-        window.reloadData()
+        mediaLibraryWindow.refresh()
       }
     case .openPanel:
       openFile(self)

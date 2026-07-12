@@ -49,6 +49,12 @@ class MediaLibraryWindowController: NSWindowController {
     NSApp.activate(ignoringOtherApps: true)
   }
 
+  /// Reload library data from the store. Called when the window is reopened so newly added
+  /// media surfaces without restarting the app.
+  func refresh() {
+    viewController.refresh()
+  }
+
   // MARK: Episode list
 
   private func showEpisodeList(for item: MediaItem) {
