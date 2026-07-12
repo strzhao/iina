@@ -432,6 +432,19 @@
 		E3FC31461FE1501E00B9B86F /* PowerSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3FC31451FE1501E00B9B86F /* PowerSource.swift */; };
 		E3FEC1332A30400F00CFD845 /* PluginInputManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3FEC1322A30400F00CFD845 /* PluginInputManager.swift */; };
 		E3FF5AC02938582F0019CE45 /* JavascriptDevTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3FF5ABF2938582F0019CE45 /* JavascriptDevTool.swift */; };
+		E3MLB1000000000000000000 /* MediaItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB0000000000000000000 /* MediaItem.swift */; };
+		E3MLB1000000000000000001 /* MediaCategory.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB0000000000000000001 /* MediaCategory.swift */; };
+		E3MLB1000000000000000002 /* FileNameCleaner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB0000000000000000002 /* FileNameCleaner.swift */; };
+		E3MLB1000000000000000003 /* MediaThumbnailer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB0000000000000000003 /* MediaThumbnailer.swift */; };
+		E3MLB1000000000000000004 /* MediaLibraryScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB0000000000000000004 /* MediaLibraryScanner.swift */; };
+		E3MLB1000000000000000005 /* MediaLibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB0000000000000000005 /* MediaLibraryStore.swift */; };
+		E3MLB1000000000000000006 /* MediaLibraryError.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB0000000000000000006 /* MediaLibraryError.swift */; };
+		E3MLB1000000000000000007 /* MediaLibraryWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB0000000000000000007 /* MediaLibraryWindowController.swift */; };
+		E3MLB1000000000000000008 /* MediaLibraryViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB0000000000000000008 /* MediaLibraryViewController.swift */; };
+		E3MLB1000000000000000009 /* MediaItemCollectionViewItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB0000000000000000009 /* MediaItemCollectionViewItem.swift */; };
+		E3MLB100000000000000000A /* ContinueWatchingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB000000000000000000A /* ContinueWatchingView.swift */; };
+		E3MLB100000000000000000B /* EpisodeListViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB000000000000000000B /* EpisodeListViewController.swift */; };
+		E3MLB100000000000000000C /* PrefMediaLibraryViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB000000000000000000C /* PrefMediaLibraryViewController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1921,6 +1934,19 @@
 		FB011A0421F8C04200477551 /* hi */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = hi; path = hi.lproj/Localizable.strings; sourceTree = "<group>"; };
 		FB011A0621F8C04200477551 /* hi */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = hi; path = hi.lproj/FilterPresets.strings; sourceTree = "<group>"; };
 		FB011A0721F8C04200477551 /* hi */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = hi; path = hi.lproj/KeyBinding.strings; sourceTree = "<group>"; };
+		E3MLB0000000000000000000 /* MediaItem.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MediaItem.swift; sourceTree = "<group>"; };
+		E3MLB0000000000000000001 /* MediaCategory.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MediaCategory.swift; sourceTree = "<group>"; };
+		E3MLB0000000000000000002 /* FileNameCleaner.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = FileNameCleaner.swift; sourceTree = "<group>"; };
+		E3MLB0000000000000000003 /* MediaThumbnailer.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MediaThumbnailer.swift; sourceTree = "<group>"; };
+		E3MLB0000000000000000004 /* MediaLibraryScanner.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MediaLibraryScanner.swift; sourceTree = "<group>"; };
+		E3MLB0000000000000000005 /* MediaLibraryStore.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MediaLibraryStore.swift; sourceTree = "<group>"; };
+		E3MLB0000000000000000006 /* MediaLibraryError.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MediaLibraryError.swift; sourceTree = "<group>"; };
+		E3MLB0000000000000000007 /* MediaLibraryWindowController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MediaLibraryWindowController.swift; sourceTree = "<group>"; };
+		E3MLB0000000000000000008 /* MediaLibraryViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MediaLibraryViewController.swift; sourceTree = "<group>"; };
+		E3MLB0000000000000000009 /* MediaItemCollectionViewItem.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MediaItemCollectionViewItem.swift; sourceTree = "<group>"; };
+		E3MLB000000000000000000A /* ContinueWatchingView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ContinueWatchingView.swift; sourceTree = "<group>"; };
+		E3MLB000000000000000000B /* EpisodeListViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = EpisodeListViewController.swift; sourceTree = "<group>"; };
+		E3MLB000000000000000000C /* PrefMediaLibraryViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PrefMediaLibraryViewController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -2548,6 +2574,26 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		E3MLB20000000000000000AB /* MediaLibrary */ = {
+			isa = PBXGroup;
+			children = (
+				E3MLB0000000000000000000 /* MediaItem.swift */,
+				E3MLB0000000000000000001 /* MediaCategory.swift */,
+				E3MLB0000000000000000002 /* FileNameCleaner.swift */,
+				E3MLB0000000000000000003 /* MediaThumbnailer.swift */,
+				E3MLB0000000000000000004 /* MediaLibraryScanner.swift */,
+				E3MLB0000000000000000005 /* MediaLibraryStore.swift */,
+				E3MLB0000000000000000006 /* MediaLibraryError.swift */,
+				E3MLB0000000000000000007 /* MediaLibraryWindowController.swift */,
+				E3MLB0000000000000000008 /* MediaLibraryViewController.swift */,
+				E3MLB0000000000000000009 /* MediaItemCollectionViewItem.swift */,
+				E3MLB000000000000000000A /* ContinueWatchingView.swift */,
+				E3MLB000000000000000000B /* EpisodeListViewController.swift */,
+				E3MLB000000000000000000C /* PrefMediaLibraryViewController.swift */,
+			);
+			path = MediaLibrary;
+			sourceTree = "<group>";
+		};
 		84EB1ED81D2F51D3004FA5A1 /* iina */ = {
 			isa = PBXGroup;
 			children = (
@@ -2566,6 +2612,7 @@
 				E3CAD4AD2146DB23000B373A /* Javascript */,
 				84A0BAA61D2FAF8400BC8DA1 /* Utils */,
 				518DB7002FA6A1480024F0B0 /* Scripts */,
+				E3MLB20000000000000000AB /* MediaLibrary */,
 			);
 			indentWidth = 2;
 			path = iina;
@@ -3185,6 +3232,19 @@
 				5125117D2E89B2ED00CDAE9F /* Display.swift in Sources */,
 				E33FEEB52229A44F00B59711 /* JavascriptAPIUtils.swift in Sources */,
 				84C6D3671EB2A427009BF721 /* HistoryWindowController.swift in Sources */,
+				E3MLB1000000000000000000 /* MediaItem.swift in Sources */,
+				E3MLB1000000000000000001 /* MediaCategory.swift in Sources */,
+				E3MLB1000000000000000002 /* FileNameCleaner.swift in Sources */,
+				E3MLB1000000000000000003 /* MediaThumbnailer.swift in Sources */,
+				E3MLB1000000000000000004 /* MediaLibraryScanner.swift in Sources */,
+				E3MLB1000000000000000005 /* MediaLibraryStore.swift in Sources */,
+				E3MLB1000000000000000006 /* MediaLibraryError.swift in Sources */,
+				E3MLB1000000000000000007 /* MediaLibraryWindowController.swift in Sources */,
+				E3MLB1000000000000000008 /* MediaLibraryViewController.swift in Sources */,
+				E3MLB1000000000000000009 /* MediaItemCollectionViewItem.swift in Sources */,
+				E3MLB100000000000000000A /* ContinueWatchingView.swift in Sources */,
+				E3MLB100000000000000000B /* EpisodeListViewController.swift in Sources */,
+				E3MLB100000000000000000C /* PrefMediaLibraryViewController.swift in Sources */,
 				9E47DAC01E3CFA6D00457420 /* DurationDisplayTextField.swift in Sources */,
 				E35306F62147F7AF008FE492 /* JavascriptAPIMpv.swift in Sources */,
 				840AF5821E732C8F00F4AF92 /* JustXMLRPC.swift in Sources */,

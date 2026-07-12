@@ -63,6 +63,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
   lazy var fontPicker: FontPickerWindowController = FontPickerWindowController()
   lazy var inspector: InspectorWindowController = InspectorWindowController()
   lazy var historyWindow: HistoryWindowController = HistoryWindowController()
+  lazy var mediaLibraryWindow: MediaLibraryWindowController = MediaLibraryWindowController()
   lazy var guideWindow: GuideWindowController = GuideWindowController()
   lazy var logWindow: LogWindowController = LogWindowController()
 
@@ -88,6 +89,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
       PrefAdvancedViewController(),
       // PrefPluginViewController(),
       PrefUtilsViewController(),
+      PrefMediaLibraryViewController(),
     ]
 
     if IINA_ENABLE_PLUGIN_SYSTEM {
@@ -998,6 +1000,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
   @IBAction func showHistoryWindow(_ sender: AnyObject) {
     historyWindow.showWindow(self)
+  }
+
+  @IBAction func showMediaLibraryWindow(_ sender: AnyObject) {
+    mediaLibraryWindow.showWindow(self)
   }
 
   @IBAction func showLogWindow(_ sender: AnyObject) {

@@ -129,6 +129,12 @@
                                     <action selector="showHistoryWindow:" target="Voe-Tx-rLC" id="yVv-sR-1DQ"/>
                                 </connections>
                             </menuItem>
+                            <menuItem title="Media Library" keyEquivalent="L" id="iina-media-library-menu">
+                                <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
+                                <connections>
+                                    <action selector="showMediaLibraryWindow:" target="Voe-Tx-rLC" id="iina-media-library-action"/>
+                                </connections>
+                            </menuItem>
                             <menuItem isSeparatorItem="YES" id="N0Z-h7-JSg"/>
                             <menuItem title="Show Current File in Finder" id="che-dy-QUU">
                                 <modifierMask key="keyEquivalentModifierMask"/>

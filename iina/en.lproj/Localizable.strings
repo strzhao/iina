@@ -1024,3 +1024,6 @@
 "settings.$toThe" = "to the";
 "settings.$top" = "top";
 "settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. IINA will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+
+"media_library.window.title" = "Media Library";
+"preference.media_library" = "Media Library";

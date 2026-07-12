@@ -955,3 +955,6 @@
 "settings.$sideOfTheScreen" = "侧";
 "settings.$toThe" = "距离屏幕";
 "settings.$top" = "顶";
+
+"media_library.window.title" = "媒体库";
+"preference.media_library" = "媒体库";
