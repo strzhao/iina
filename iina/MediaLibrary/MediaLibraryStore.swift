@@ -163,8 +163,11 @@ final class MediaLibraryStore: NSObject {
     return result
   }
 
-  /// Items with playback progress < 95% of duration, not marked played, sorted by last-played,
-  /// limited to 10. Joins to `HistoryController` via `mpvMd5`.
+  /// Items with playback progress < 95% of duration, sorted by last-played, limited to 10.
+  /// Joins to `HistoryController` via `mpvMd5`.
+  ///
+  /// `played` is intentionally not consulted: `HistoryController.add` hardcodes `played=true` on
+  /// every entry, so filtering on it would exclude the entire history.
   func continueWatchingItems() -> [MediaItem] {
     let ignorePath = currentIgnorePath()
     let history = HistoryController.shared.history
@@ -176,15 +179,17 @@ final class MediaLibraryStore: NSObject {
         matched = items.first { Utility.mpvWatchLaterMd5($0.url, ignorePath) == entry.mpvMd5 }
       }
       guard let item = matched else { continue }
-      // Exclude marked played.
-      if entry.played { continue }
       // Duration guard.
       let durationSec: Double
       if let d = item.duration { durationSec = d }
       else if entry.duration.second > 0 { durationSec = entry.duration.second }
       else { continue }
-      // Progress guard: must have a progress and be < 95% of duration.
-      guard let progressSec = entry.mpvProgress?.second, progressSec > 0 else { continue }
+      // Progress guard: read watch-later LIVE (not entry.mpvProgress, which is a startup snapshot
+      // set once in PlaybackHistory.init(coder:) and never refreshed — newly played entries have
+      // mpvProgress==nil and wouldn't appear until restart). This makes continue-watching reflect
+      // the latest playback without restarting.
+      guard let progressSec = Utility.playbackProgressFromWatchLater(entry.mpvMd5)?.second,
+            progressSec > 0 else { continue }
       if progressSec >= durationSec * MediaLibraryStore.watchedThreshold { continue }
       pairs.append((item: item, addedDate: entry.addedDate))
     }
@@ -240,12 +245,13 @@ final class MediaLibraryStore: NSObject {
     return groups
   }
 
-  /// Playback progress (seconds) for a media item, if recorded in history. 0/nil if none.
+  /// Playback progress (seconds) for a media item, read LIVE from watch-later. Returns nil if no
+  /// watch-later file / no `start=`. Reading live (rather than `entry.mpvProgress`, a startup
+  /// snapshot) keeps card progress bars current after new playback without restarting.
   func progress(for item: MediaItem) -> Double? {
     let ignorePath = currentIgnorePath()
     let md5 = Utility.mpvWatchLaterMd5(item.url, ignorePath)
-    let entry = HistoryController.shared.history.first { $0.mpvMd5 == md5 }
-    return entry?.mpvProgress?.second
+    return Utility.playbackProgressFromWatchLater(md5)?.second
   }
 
   // MARK: Persistence

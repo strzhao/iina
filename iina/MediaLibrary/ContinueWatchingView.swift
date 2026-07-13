@@ -50,6 +50,7 @@ class ContinueWatchingView: NSView, NSCollectionViewDataSource, NSCollectionView
     collectionView.dataSource = self
     collectionView.delegate = self
     collectionView.backgroundColors = [.clear]
+    collectionView.collectionViewLayout = flowLayout
     collectionView.register(MediaItemCollectionViewItem.self, forItemWithIdentifier: ContinueWatchingView.itemIdentifier)
     collectionView.isSelectable = true
 

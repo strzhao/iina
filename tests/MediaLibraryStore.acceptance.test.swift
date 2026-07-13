@@ -142,19 +142,9 @@ final class MediaLibraryStoreAcceptanceTests: XCTestCase {
     }
   }
 
-  // MARK: - 契约：played==true 不进继续观看
-
-  /// 谓词: 契约「mpvProgress != nil 且 < duration*0.95 且 played==false」
-  /// played==true 即使有进度也不进
-  func test_continueWatching_excludes_played_true() {
-    let item = makeMediaItem(name: "已看电影")
-    injectHistoryEntry(url: item.url, progressSeconds: 50.0, played: true, addedDate: Date())
-    MediaLibraryStore.shared.setItemsForTesting([item])
-
-    let cw = MediaLibraryStore.shared.continueWatchingItems()
-    XCTAssertFalse(cw.contains { $0.url == item.url },
-                   "played==true 的视频不得进入继续观看")
-  }
+  // 注：「played==true 不进继续观看」原测试已移除——修复继续观看 bug 后 played 不再是判据
+  // （HistoryController.add 硬编码 played=true，过滤它会排除全部历史）。正确语义
+  // （played==true + 进度<95% → 进入）由 ContinueWatchingItemsFilter.acceptance.test.swift 覆盖。
 
   // MARK: - 契约：无进度（mpvProgress==nil）不进
 
