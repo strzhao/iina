@@ -16,3 +16,4 @@
 - [2026-07-15] CALayer 阴影无 shadowPath 致 NSCollectionView 滚动卡顿 | tags: iina, appkit, calayer, shadow, shadowpath, performance, scroll | → patterns.md
 - [2026-07-15] NSCollectionView cell hover 滚动时 mouseExited 漏触发 + trackingArea rect/inVisibleRect 冲突 | tags: iina, appkit, nstrackingarea, hover, mouseexited, scroll | → patterns.md
 - [2026-07-15] MediaLibrary 跨维度根因：单例+跨线程共享可变引用致 bug 修复连环副作用 | tags: iina, medialibrary, architecture, concurrency, data-race, side-effect, audit | → patterns.md
+- [2026-07-15] swift CGWindowListCopyWindowInfo 须传 kCGNullWindowID（nil 编译错被 2>/dev/null 吞致"窗口不存在"假阴性） | tags: iina, gui, verification, cgwindowlist, swift, debugging | → patterns.md

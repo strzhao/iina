@@ -71,3 +71,9 @@
 **Scenario**: 对视频墙做架构/体验/性能审计（3 agent 并行读码 + plan-reviewer 抽查证据），发现多个 P0/P1 问题有共同根因，且历史修复普遍存在"修一个 bug 引入一个副作用"
 **Lesson**: ① **数据竞争根因**：`MediaLibraryStore` 单例 + `MediaItem`（NSObject 可变引用类型）跨线程共享——probeQueue 后台写 width/height/duration/year/bitrate、主线程读 + `saveIndex` NSKeyedArchiver 编码遍历 items——全无同步（TSan 可检出），是 P0 竞态 + P1 大量同步 I/O 的共同源头；修法：probe 字段写入切 `DispatchQueue.main.async`，或 MediaItem 改值类型/actor 隔离。② **"修副作用"模式**（每条都已在 patterns.md 单列）：实时读 watch-later（修进度刷新→引入每次 refresh 全量同步 I/O）、probedKeys 防循环（→ 防了首次失败后的正当重试，须 rescan 后重置）、缩略图池化修串行（→ 单实例 `cancelAllOperations` 丢在途任务 + backoff 4 次后丢任务永久占位图）、rescan 保留缓存（→ probedKeys 不随 rescan 重置）。**根因是缺整体的状态机 / 缓存失效 / 取消设计**，不是单个 bug。③ **修 P0 的耦合警示**：把 probe 写入切主线程会加剧主线程 reload 体感（P1-3/P2-9），须 Phase 0 同时做 `metadataProbed` 通知节流（合并 100ms 内多次 probe 完成）。
 **Evidence**: 审计报告 `documents/视频墙审计报告.md`（31 问题 / 13 健康项 / 4 阶段路线图）；关键证据 `MediaLibraryStore.swift:339-352`（后台写）/ `:291,:362`（主线程 saveIndex 编码）/ `MediaItem.swift:53-65`（无锁 var）/ `MediaThumbnailer.swift:162-169`（backoff 丢任务）
+
+### [2026-07-15] swift CGWindowListCopyWindowInfo 须传 kCGNullWindowID；nil 编译错被 2>/dev/null 吞致"窗口不存在"假阴性
+<!-- tags: iina, gui, verification, cgwindowlist, swift, debugging, false-negative -->
+**Scenario**: 用 `swift -e` 内联脚本验证 IINA GUI 窗口是否打开，写成 `CGWindowListCopyWindowInfo([...], nil)`——第二参是 `CGWindowID(UInt32)` 不能传 nil，编译报 `'nil' is not compatible with expected argument type 'CGWindowID'`。脚本带了 `2>/dev/null` 抑制 stderr，编译错被吞成**静默空输出**，误判"IINA 0 窗口 / 媒体库没开"，浪费数轮排查（实际窗口一直开着 1000×712 "媒体库"）。
+**Lesson**: `CGWindowListCopyWindowInfo(options, kCGNullWindowID)` 的第二参**不能传 nil，须传 `kCGNullWindowID`**（表"所有窗口"）。**诊断脚本裸跑先确认能编译**——绝不在验证脚本上加 `2>/dev/null`（除非已确认无编译错）；编译错被吞 = 空输出 = 假阴性，比报错更危险（看着像"验证通过/无窗口"）。排查"app 窗口没出现"前，先确认探测脚本本身正确。
+**Evidence**: P0 修复 QA 时 `swift -e '...CGWindowListCopyWindowInfo([...], nil)...' 2>/dev/null` 输出空 → 误判媒体库未开、怀疑回归；去 `2>/dev/null` 暴露编译错，改 `kCGNullWindowID` 后正确返回 `IINA win 1000x712 "媒体库"`。
