@@ -54,6 +54,19 @@ final class MediaLibraryStore: NSObject {
   /// Background queue for scanning.
   private let scanQueue = DispatchQueue(label: "iina.media.library.scan", qos: .userInitiated)
 
+  /// Lightweight serial queue for lazy metadata probing (P3). Serial so we don't stampede the NAS
+  /// with 1000 concurrent avformat_open_input calls; `userInitiated` keeps cards responsive.
+  private let probeQueue = DispatchQueue(label: "iina.media.library.probe", qos: .userInitiated)
+
+  /// Notification posted when a single item's metadata has been lazily probed and updated. The
+  /// object is the `MediaItem`. Observers (e.g. the grid) refresh the corresponding card.
+  static let metadataProbedNotification = Notification.Name("iinaMediaLibraryMetadataProbed")
+
+  /// Set of mpvMd5 keys currently in-flight on `probeQueue`, to avoid re-probing the same item
+  /// while a probe is pending. Guarded by `probeLock`.
+  private var probingKeys: Set<String> = []
+  private let probeLock = NSLock()
+
   /// True while a rescan is in progress (UI shows "扫描中…" instead of the empty state).
   private(set) var isScanning: Bool = false
 
@@ -281,6 +294,74 @@ final class MediaLibraryStore: NSObject {
       try data.write(to: indexURL, options: [.atomic])
     } catch {
       // Non-fatal: index is only a cache.
+    }
+  }
+
+  // MARK: Lazy metadata probing (P3)
+
+  /// Lazily probe width/height/videoCodec/bitrate/duration for an item via libavformat, and fill
+  /// the year from `FileNameCleaner`. Runs on a serial background queue; on success the item's
+  /// fields are updated, `saveIndex()` persists, and `metadataProbedNotification` is posted so the
+  /// grid can refresh that card. No-op if the item already has a probed `height` (heuristic that
+  /// the probe completed once). Failures degrade silently: fields stay nil, no crash (P3.3).
+  ///
+  /// Designed to be called when a card becomes visible. It does not block first paint — the card
+  /// reads already-cached fields immediately and is refreshed when the probe completes.
+  /// Keys for items whose metadata probe has completed (success or failure). Prevents re-probing
+  /// items whose probe yielded no height (NAS I/O hiccup / no video stream) — without this, every
+  /// configure would re-probe and re-post metadataProbedNotification → reload → flicker loop.
+  private var probedKeys: Set<String> = []
+
+  func probeMetadata(for item: MediaItem) {
+    // Already probed (height present, or previously attempted): nothing to do.
+    if item.height != nil { return }
+    let ignorePath = currentIgnorePath()
+    let key = Utility.mpvWatchLaterMd5(item.url, ignorePath)
+    probeLock.lock()
+    if probingKeys.contains(key) || probedKeys.contains(key) {
+      probeLock.unlock()
+      return
+    }
+    probingKeys.insert(key)
+    probeLock.unlock()
+
+    probeQueue.async { [weak self] in
+      guard let self = self else { return }
+      // Always fill year from filename first (cheap, always available).
+      if item.year == nil {
+        let cleaned = FileNameCleaner.clean(item.rawName)
+        item.year = cleaned.year
+      }
+      // Probe via libavformat. This call is the ObjC class method; returns nil on failure.
+      let info = FFmpegController.probeVideoInfo(forFile: item.url.path)
+      var changed = item.year != nil
+      if let info = info as? [String: Any] {
+        if let w = info["@iina_width"] as? Int { item.width = w; changed = true }
+        if let w = info["@iina_width"] as? NSNumber { item.width = w.intValue; changed = true }
+        if let h = info["@iina_height"] as? Int { item.height = h; changed = true }
+        if let h = info["@iina_height"] as? NSNumber { item.height = h.intValue; changed = true }
+        if let codec = info["@iina_video_codec"] as? String { item.videoCodec = codec; changed = true }
+        if let br = info["@iina_bit_rate"] as? Int { item.bitrate = br; changed = true }
+        if let br = info["@iina_bit_rate"] as? NSNumber { item.bitrate = br.intValue; changed = true }
+        if let dur = info["@iina_duration"] as? Double, dur > 0 {
+          item.duration = dur; changed = true
+        }
+        if let dur = info["@iina_duration"] as? NSNumber, dur.doubleValue > 0 {
+          item.duration = dur.doubleValue; changed = true
+        }
+      }
+
+      self.probeLock.lock()
+      self.probingKeys.remove(key)
+      self.probedKeys.insert(key)
+      self.probeLock.unlock()
+
+      guard changed else { return }
+      DispatchQueue.main.async {
+        // Persist + notify on the main thread (saveIndex touches items; observers expect main).
+        self.saveIndex()
+        NotificationCenter.default.post(name: MediaLibraryStore.metadataProbedNotification, object: item)
+      }
     }
   }
 

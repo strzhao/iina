@@ -38,6 +38,16 @@ xcodebuild -project iina.xcodeproj -scheme iina -configuration Debug -destinatio
 - Auto Layout 下 `isHidden=true` **不改变 frame**，约束仍生效——需动态高度时持有约束引用改 `constant`
 - 本地化：`iina/*.lproj/`，用户首选中文
 
+## 色彩与交互设计体系（统一规范）
+
+**后续所有 UI（含 `MediaLibrary/` 视频墙及任何新增界面）统一采用** [`documents/refs/colors.md`](documents/refs/colors.md) **的 stringzhao-life 色彩体系**，不再零散用系统色或硬编码颜色。
+
+- **品牌色 苔 Sage `#3A7D68`**：CTA、选中态、hover 强调、进度条、焦点环——点睛用，不大面积铺
+- **灰阶三档**：雾 `#EBEBEA`（卡片/次级背景）/ 烟 `#8F8F8D`（描述/辅助文字）/ 炭 `#595957`（placeholder/标签）承接信息层级；墨 `#1A1A18` 正文、纸 `#F7F6F1` 页面背景
+- **语义色**：琥 `#D4920A` warning / 朱 `#D94F3D` destructive（error/delete）/ 天 `#3B87CC` info（link/badge）
+- **AppKit 适配**：colors.md 以 web 表达（oklch + CSS tokens），AppKit 下用 `NSColor` 从 hex 构造，建议集中到 `iina/Color+Brand.swift`（如 `NSColor(hex: 0x3A7D68)` 或 `NSColor(srgbRed:green:blue:alpha:)`）
+- **暗黑模式**：colors.md 当前是浅色导向，固定 hex 不随系统切换；引入后须为品牌色与灰阶提供 dark 变体（或 `NSColor(name:)` 动态色），避免破坏视频墙原有的暗黑支持
+
 ## 测试现状（重要）
 
 `tests/*.acceptance.test.swift`（10 个）是 **XCTest 风格契约测试 + `@testable import iina`**，但当前**不可运行**：

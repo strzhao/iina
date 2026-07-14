@@ -21,11 +21,14 @@ import Cocoa
 ///
 /// `thumbnailCount` is set to `5`, but `FFmpegController` generates `thumbnailCount + 1` frames
 /// (the loop is `for i = 0; i <= thumbnailCount; i++`), i.e. 6 frames at 0%/20%/40%/60%/80%/100%.
-/// We take **index 1** (~20% position) to avoid black screens at intro/outro.
+/// We compute the **average luminance of each frame and pick the brightest** (avoids black
+/// intro/outro screens — the cinematic card design amplifies such artifacts). If all frames are
+/// near-black, we fall back to **index 1** (~20% position).
 ///
 /// Caching reuses `ThumbnailCache`'s directory under `Utility.thumbnailCacheURL` in a
 /// `media_thumbnails/` subdirectory. The cache key is
-/// `Utility.mpvWatchLaterMd5(url, ignorePath)`.
+/// `Utility.mpvWatchLaterMd5(url, ignorePath)` (unchanged). The cached PNG is rendered at
+/// `thumbWidth = 480` (up from 320) so the larger card display (~240pt) doesn't up-scale and blur.
 final class MediaThumbnailer: NSObject {
 
   /// Shared singleton used by the media library UI.
@@ -37,14 +40,19 @@ final class MediaThumbnailer: NSObject {
   /// Thumbnails to generate per file. FFmpegController emits `thumbnailCount + 1` frames.
   private static let thumbnailCount: Int = 5
 
-  /// Index of the frame to pick (≈20% position; avoids black intro/outro).
-  private static let pickedFrameIndex: Int = 1
+  /// Fallback frame index when all candidate frames are near-black (avoids a black card).
+  private static let fallbackFrameIndex: Int = 1
 
   /// Per-file generation timeout (seconds). On expiry, completion is called with nil.
   private static let timeout: TimeInterval = 10
 
-  /// Thumbnail width in pixels.
-  private static let thumbWidth: Int = 320
+  /// Thumbnail width in pixels. 480 matches the card display size (~240pt @ 2×) so the image
+  /// is rendered at display resolution and not up-scaled.
+  private static let thumbWidth: Int = 480
+
+  /// Below this mean luminance (0–255), a frame is considered "near-black". When all candidate
+  /// frames are below this, we fall back to `fallbackFrameIndex`.
+  private static let blackLuminanceThreshold: Double = 12
 
   /// Directory under `Utility.thumbnailCacheURL` used for media-library thumbnails.
   static let cacheSubdir = "media_thumbnails"
@@ -214,8 +222,8 @@ extension MediaThumbnailer {
     lock.unlock()
 
     let picked: NSImage? = {
-      guard succeeded, thumbnails.count > MediaThumbnailer.pickedFrameIndex else { return nil }
-      return thumbnails[MediaThumbnailer.pickedFrameIndex].image
+      guard succeeded, !thumbnails.isEmpty else { return nil }
+      return MediaThumbnailer.pickBrightestFrame(thumbnails)
     }()
 
     if let img = picked {
@@ -226,5 +234,76 @@ extension MediaThumbnailer {
       }
     }
     DispatchQueue.main.async { job.completion(picked) }
+  }
+
+  // MARK: Smart frame selection
+
+  /// Pick the frame with the highest average luminance among the candidates. If every frame is
+  /// near-black (below `blackLuminanceThreshold`), fall back to `fallbackFrameIndex` (clamped to
+  /// the available range) so the card isn't pure black.
+  ///
+  /// Luminance is computed as the mean gray value (Rec. 601: 0.299R + 0.587G + 0.114B) across
+  /// the frame's pixels, sampled via the NSBitmapImageRep. Sampling is done off the main thread
+  /// (this method is called from the FFmpeg delegate callback queue).
+  static func pickBrightestFrame(_ thumbnails: [FFThumbnail]) -> NSImage? {
+    guard !thumbnails.isEmpty else { return nil }
+
+    var bestIdx = -1
+    var bestLuma: Double = -1
+    for (i, thumb) in thumbnails.enumerated() {
+      let luma = averageLuminance(of: thumb.image)
+      if luma > bestLuma {
+        bestLuma = luma
+        bestIdx = i
+      }
+    }
+
+    // All-black fallback: if the brightest frame is still near-black, use the fallback index so
+    // we don't pin the card to a single black frame when a slightly less-black frame at ~20%
+    // might at least show a logo. Clamp index to bounds defensively.
+    if bestLuma < MediaThumbnailer.blackLuminanceThreshold {
+      let fallback = min(max(MediaThumbnailer.fallbackFrameIndex, 0), thumbnails.count - 1)
+      Logger.log("MediaThumbnailer: all frames near-black (best=\(bestLuma)), fallback idx=\(fallback)", level: .warning)
+      return thumbnails[fallback].image
+    }
+
+    Logger.log("MediaThumbnailer: picked idx=\(bestIdx) luma=\(bestLuma) of \(thumbnails.count) frames", level: .warning)
+    return thumbnails[bestIdx].image
+  }
+
+  /// Compute the average luminance (0–255) of an image. Returns -1 on failure.
+  private static func averageLuminance(of image: NSImage?) -> Double {
+    guard let image = image,
+          let tiff = image.tiffRepresentation,
+          let rep = NSBitmapImageRep(data: tiff) else {
+      return -1
+    }
+    let width = rep.pixelsWide
+    let height = rep.pixelsHigh
+    guard width > 0, height > 0 else { return -1 }
+
+    // Sample on a stride to keep this cheap (large images don't need per-pixel analysis to
+    // compare relative brightness). Target ~4096 samples.
+    let targetSamples = 2048
+    let totalPixels = width * height
+    let step = max(1, Int((Double(totalPixels) / Double(targetSamples)).rounded(.up)))
+
+    var sum: Double = 0
+    var count: Double = 0
+    for y in Swift.stride(from: 0, to: height, by: step) {
+      for x in Swift.stride(from: 0, to: width, by: step) {
+        if let nsColor = rep.colorAt(x: x, y: y) {
+          // sRGB → luma (Rec. 601), scaled to 0–255.
+          let r = nsColor.redComponent
+          let g = nsColor.greenComponent
+          let b = nsColor.blueComponent
+          let luma = (0.299 * r + 0.587 * g + 0.114 * b) * 255.0
+          sum += luma
+          count += 1
+        }
+      }
+    }
+    guard count > 0 else { return -1 }
+    return sum / count
   }
 }

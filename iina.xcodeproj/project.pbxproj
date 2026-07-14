@@ -443,6 +443,8 @@
 		E3MLB1000000000000000008 /* MediaLibraryViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB0000000000000000008 /* MediaLibraryViewController.swift */; };
 		E3MLB1000000000000000009 /* MediaItemCollectionViewItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB0000000000000000009 /* MediaItemCollectionViewItem.swift */; };
 		E3MLB100000000000000000A /* ContinueWatchingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB000000000000000000A /* ContinueWatchingView.swift */; };
+		E3MLB100000000000000000D /* ContinueWatchingCollectionViewItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB000000000000000000D /* ContinueWatchingCollectionViewItem.swift */; };
+		E3MLB100000000000000000E /* Color+Brand.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB000000000000000000E /* Color+Brand.swift */; };
 		E3MLB100000000000000000B /* EpisodeListViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB000000000000000000B /* EpisodeListViewController.swift */; };
 		E3MLB100000000000000000C /* PrefMediaLibraryViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3MLB000000000000000000C /* PrefMediaLibraryViewController.swift */; };
 /* End PBXBuildFile section */
@@ -1945,6 +1947,8 @@
 		E3MLB0000000000000000008 /* MediaLibraryViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MediaLibraryViewController.swift; sourceTree = "<group>"; };
 		E3MLB0000000000000000009 /* MediaItemCollectionViewItem.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MediaItemCollectionViewItem.swift; sourceTree = "<group>"; };
 		E3MLB000000000000000000A /* ContinueWatchingView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ContinueWatchingView.swift; sourceTree = "<group>"; };
+		E3MLB000000000000000000D /* ContinueWatchingCollectionViewItem.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ContinueWatchingCollectionViewItem.swift; sourceTree = "<group>"; };
+		E3MLB000000000000000000E /* Color+Brand.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = "Color+Brand.swift"; sourceTree = "<group>"; };
 		E3MLB000000000000000000B /* EpisodeListViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = EpisodeListViewController.swift; sourceTree = "<group>"; };
 		E3MLB000000000000000000C /* PrefMediaLibraryViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PrefMediaLibraryViewController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -2590,6 +2594,7 @@
 				E3MLB000000000000000000A /* ContinueWatchingView.swift */,
 				E3MLB000000000000000000B /* EpisodeListViewController.swift */,
 				E3MLB000000000000000000C /* PrefMediaLibraryViewController.swift */,
+				E3MLB000000000000000000D /* ContinueWatchingCollectionViewItem.swift */,
 			);
 			path = MediaLibrary;
 			sourceTree = "<group>";
@@ -2613,6 +2618,7 @@
 				84A0BAA61D2FAF8400BC8DA1 /* Utils */,
 				518DB7002FA6A1480024F0B0 /* Scripts */,
 				E3MLB20000000000000000AB /* MediaLibrary */,
+				E3MLB000000000000000000E /* Color+Brand.swift */,
 			);
 			indentWidth = 2;
 			path = iina;
@@ -3243,6 +3249,8 @@
 				E3MLB1000000000000000008 /* MediaLibraryViewController.swift in Sources */,
 				E3MLB1000000000000000009 /* MediaItemCollectionViewItem.swift in Sources */,
 				E3MLB100000000000000000A /* ContinueWatchingView.swift in Sources */,
+				E3MLB100000000000000000D /* ContinueWatchingCollectionViewItem.swift in Sources */,
+				E3MLB100000000000000000E /* Color+Brand.swift in Sources */,
 				E3MLB100000000000000000B /* EpisodeListViewController.swift in Sources */,
 				E3MLB100000000000000000C /* PrefMediaLibraryViewController.swift in Sources */,
 				9E47DAC01E3CFA6D00457420 /* DurationDisplayTextField.swift in Sources */,

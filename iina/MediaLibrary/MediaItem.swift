@@ -28,6 +28,13 @@ final class MediaItem: NSObject, NSSecureCoding {
     static let episodeNumber = "MIEpisodeNumber"
     static let duration = "MIDuration"
     static let thumbnailPath = "MIThumbnailPath"
+    // New metadata fields (P0.4). Decoded with `containsValue` for backward compatibility —
+    // older index.plist files without these keys decode to nil without crashing.
+    static let year = "MIYear"
+    static let width = "MIWidth"
+    static let height = "MIHeight"
+    static let videoCodec = "MIVideoCodec"
+    static let bitrate = "MIBitrate"
   }
 
   /// File URL of the video.
@@ -46,6 +53,16 @@ final class MediaItem: NSObject, NSSecureCoding {
   var duration: Double?
   /// Path to the cached thumbnail image, if generated.
   var thumbnailPath: URL?
+  /// Release year parsed from the filename (1900–2100). `nil` if not detected.
+  var year: Int?
+  /// Video stream width in pixels (lazily probed via libavformat). `nil` until probed.
+  var width: Int?
+  /// Video stream height in pixels (lazily probed). `nil` until probed.
+  var height: Int?
+  /// Video codec name (e.g. `h264`, `hevc`), lazily probed. `nil` until probed.
+  var videoCodec: String?
+  /// Overall bit rate in bps, lazily probed. `nil` until probed.
+  var bitrate: Int?
 
   // MARK: Init
 
@@ -56,7 +73,12 @@ final class MediaItem: NSObject, NSSecureCoding {
        tvShowId: String? = nil,
        episodeNumber: Int? = nil,
        duration: Double? = nil,
-       thumbnailPath: URL? = nil) {
+       thumbnailPath: URL? = nil,
+       year: Int? = nil,
+       width: Int? = nil,
+       height: Int? = nil,
+       videoCodec: String? = nil,
+       bitrate: Int? = nil) {
     self.url = url
     self.cleanedName = cleanedName
     self.rawName = rawName
@@ -65,6 +87,11 @@ final class MediaItem: NSObject, NSSecureCoding {
     self.episodeNumber = episodeNumber
     self.duration = duration
     self.thumbnailPath = thumbnailPath
+    self.year = year
+    self.width = width
+    self.height = height
+    self.videoCodec = videoCodec
+    self.bitrate = bitrate
     super.init()
   }
 
@@ -98,6 +125,34 @@ final class MediaItem: NSObject, NSSecureCoding {
       self.duration = nil
     }
     self.thumbnailPath = coder.decodeObject(of: NSURL.self, forKey: Key.thumbnailPath) as URL?
+    // New metadata fields: decode with containsValue guard for backward compatibility.
+    if coder.containsValue(forKey: Key.year) {
+      let y = coder.decodeInteger(forKey: Key.year)
+      self.year = (y >= 1900 && y <= 2100) ? y : nil
+    } else {
+      self.year = nil
+    }
+    if coder.containsValue(forKey: Key.width) {
+      let w = coder.decodeInteger(forKey: Key.width)
+      self.width = w > 0 ? w : nil
+    } else {
+      self.width = nil
+    }
+    if coder.containsValue(forKey: Key.height) {
+      let h = coder.decodeInteger(forKey: Key.height)
+      self.height = h > 0 ? h : nil
+    } else {
+      self.height = nil
+    }
+    self.videoCodec = coder.containsValue(forKey: Key.videoCodec)
+      ? coder.decodeObject(of: NSString.self, forKey: Key.videoCodec) as String?
+      : nil
+    if coder.containsValue(forKey: Key.bitrate) {
+      let br = coder.decodeInteger(forKey: Key.bitrate)
+      self.bitrate = br > 0 ? br : nil
+    } else {
+      self.bitrate = nil
+    }
     super.init()
   }
 
@@ -117,6 +172,21 @@ final class MediaItem: NSObject, NSSecureCoding {
     }
     if let thumbnailPath = thumbnailPath {
       coder.encode(thumbnailPath as NSURL, forKey: Key.thumbnailPath)
+    }
+    if let year = year {
+      coder.encode(year, forKey: Key.year)
+    }
+    if let width = width {
+      coder.encode(width, forKey: Key.width)
+    }
+    if let height = height {
+      coder.encode(height, forKey: Key.height)
+    }
+    if let videoCodec = videoCodec {
+      coder.encode(videoCodec as NSString, forKey: Key.videoCodec)
+    }
+    if let bitrate = bitrate {
+      coder.encode(bitrate, forKey: Key.bitrate)
     }
   }
 }

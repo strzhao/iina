@@ -27,7 +27,7 @@ class ContinueWatchingView: NSView, NSCollectionViewDataSource, NSCollectionView
 
   override init(frame frameRect: NSRect) {
     flowLayout = NSCollectionViewFlowLayout()
-    flowLayout.itemSize = NSSize(width: 160, height: 90)
+    flowLayout.itemSize = ContinueWatchingCollectionViewItem.itemSize
     flowLayout.minimumInteritemSpacing = 8
     flowLayout.minimumLineSpacing = 8
     flowLayout.scrollDirection = .horizontal
@@ -51,7 +51,7 @@ class ContinueWatchingView: NSView, NSCollectionViewDataSource, NSCollectionView
     collectionView.delegate = self
     collectionView.backgroundColors = [.clear]
     collectionView.collectionViewLayout = flowLayout
-    collectionView.register(MediaItemCollectionViewItem.self, forItemWithIdentifier: ContinueWatchingView.itemIdentifier)
+    collectionView.register(ContinueWatchingCollectionViewItem.self, forItemWithIdentifier: ContinueWatchingView.itemIdentifier)
     collectionView.isSelectable = true
 
     scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -90,7 +90,9 @@ class ContinueWatchingView: NSView, NSCollectionViewDataSource, NSCollectionView
   }
 
   func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
-    let item = collectionView.makeItem(withIdentifier: ContinueWatchingView.itemIdentifier, for: indexPath) as! MediaItemCollectionViewItem
+    guard let item = collectionView.makeItem(withIdentifier: ContinueWatchingView.itemIdentifier, for: indexPath) as? ContinueWatchingCollectionViewItem else {
+      return NSCollectionViewItem()
+    }
     if let mediaItem = items[at: indexPath.item] {
       item.configure(with: mediaItem, ignorePath: PlayerCore.activeOrNew.ignorePathInWatchLaterConfig)
     }

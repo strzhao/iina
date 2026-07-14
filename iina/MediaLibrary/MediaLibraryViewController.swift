@@ -66,6 +66,32 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
 
   // MARK: View lifecycle
 
+  /// Target cards per row. Responsive layout (viewDidLayout) keeps exactly this many columns
+  /// regardless of window width — the old fixed 240pt itemSize showed 6+ columns on wide windows.
+  private let targetColumns = 5
+  /// Last width recomputeItemSize sized for. Guarding on this (not on itemSize equality) prevents
+  /// a layout loop: setting itemSize invalidates layout → viewDidLayout → recompute. Without this,
+  /// the grid kept re-laying-out and re-configuring cells, causing the visible flicker.
+  private var lastLayoutWidth: CGFloat = -1
+
+  override func viewDidLayout() {
+    super.viewDidLayout()
+    recomputeItemSize()
+  }
+
+  /// Recompute `flowLayout.itemSize` so exactly `targetColumns` cards fit the current width.
+  /// Only re-sets when the width actually changes (see `lastLayoutWidth`).
+  private func recomputeItemSize() {
+    let width = collectionView.bounds.width
+    guard width > 0, width != lastLayoutWidth else { return }
+    let inset: CGFloat = 12, spacing: CGFloat = 10
+    let available = width - inset * 2
+    let w = floor((available - CGFloat(targetColumns - 1) * spacing) / CGFloat(targetColumns))
+    let h = floor(w * 9.0 / 16.0)
+    flowLayout.itemSize = NSSize(width: w, height: h)
+    lastLayoutWidth = width
+  }
+
   override func loadView() {
     let container = NSView(frame: NSRect(x: 0, y: 0, width: 1000, height: 680))
 
@@ -158,6 +184,8 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
                                            name: MediaLibraryStore.scannedNotification, object: nil)
     NotificationCenter.default.addObserver(self, selector: #selector(historyUpdated),
                                            name: .iinaHistoryUpdated, object: nil)
+    NotificationCenter.default.addObserver(self, selector: #selector(metadataProbed(_:)),
+                                           name: MediaLibraryStore.metadataProbedNotification, object: nil)
 
     // Initial render from cached index, then kick off a rescan.
     refresh()
@@ -198,6 +226,32 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
 
   @objc private func historyUpdated() {
     DispatchQueue.main.async { [weak self] in self?.refresh() }
+  }
+
+  /// A lazy metadata probe completed (P3). Re-configure only the currently-visible grid items so
+  /// their cards pick up the newly-probed year/resolution/codec without a full grid reload (which
+  /// would interrupt scrolling). Coalesces rapid-fire probes.
+  @objc private func metadataProbed(_ note: Notification) {
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self else { return }
+      let visible = self.collectionView.visibleItems()
+      guard !visible.isEmpty else { return }
+      // Re-run configure on each visible item so subtitle/meta pick up the probed fields.
+      for case let cell as MediaItemCollectionViewItem in visible {
+        guard let item = cell.mediaItem else { continue }
+        let ignorePath = PlayerCore.activeOrNew.ignorePathInWatchLaterConfig
+        // Re-derive the displayName/episodeCount for TV-show collection cards.
+        if let idx = self.displayedItems.firstIndex(where: { $0 === item }),
+           idx < self.displayedGroupCounts.count {
+          cell.configure(with: item,
+                         ignorePath: ignorePath,
+                         displayName: item.tvShowId ?? item.cleanedName,
+                         episodeCount: self.displayedGroupCounts[idx])
+        } else {
+          cell.configure(with: item, ignorePath: ignorePath)
+        }
+      }
+    }
   }
 
   // MARK: Refresh
@@ -261,7 +315,9 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
   }
 
   func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
-    let item = collectionView.makeItem(withIdentifier: MediaLibraryViewController.itemIdentifier, for: indexPath) as! MediaItemCollectionViewItem
+    guard let item = collectionView.makeItem(withIdentifier: MediaLibraryViewController.itemIdentifier, for: indexPath) as? MediaItemCollectionViewItem else {
+      return NSCollectionViewItem()
+    }
     if let mediaItem = displayedItems[at: indexPath.item] {
       let idx = indexPath.item
       // TV-show collection mode: display the bare show name + episode-count badge.

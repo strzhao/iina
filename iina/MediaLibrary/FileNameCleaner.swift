@@ -16,6 +16,8 @@ struct FileNameCleanResult {
   let episodeNumber: Int?
   /// TV show identifier (cleaned show name) when the name is an episode of a show, otherwise `nil`.
   let tvShowId: String?
+  /// Release year if detected (4-digit, 1900–2100), otherwise `nil`.
+  let year: Int?
 }
 
 /// Cleans raw video file/directory names from download-site artifacts and detects episode numbers.
@@ -52,6 +54,11 @@ enum FileNameCleaner {
     (#"EP?(\d+)"#, 1),
     (#"[Ee](\d+)"#, 1),
   ]
+
+  /// Release-year pattern: a 4-digit number in the range 1900–2100, bounded by a separator
+  /// (`._ -[（(` or start/end) so it doesn't match a random 4-digit run inside a longer token.
+  /// Captures the year in group 1.
+  private static let yearPattern = #"(?:^|[._\- \[（(])((?:19[0-9]{2}|20[0-9]{2}|2100))(?:$|[._\- \]）)])"#
 
   /// Clean a raw file/directory name.
   ///
@@ -92,7 +99,20 @@ enum FileNameCleaner {
       }
     }
 
-    // 4. Truncate at resolution/encoding suffix. Tokens may be separated by `.` or `[` or ` ` or `_`.
+    // 4. Detect release year (1900–2100, bounded by separators) before suffix truncation so a
+    //    year token at the suffix boundary isn't lost.
+    var year: Int? = nil
+    if let regex = try? NSRegularExpression(pattern: yearPattern, options: []) {
+      let range = NSRange(location: 0, length: name.utf16.count)
+      if let match = regex.firstMatch(in: name, options: [], range: range),
+         match.numberOfRanges > 1,
+         let yRange = Range(match.range(at: 1), in: name),
+         let y = Int(name[yRange]) {
+        year = y
+      }
+    }
+
+    // 5. Truncate at resolution/encoding suffix. Tokens may be separated by `.` or `[` or ` ` or `_`.
     //    We look for the first occurrence of any token preceded by a separator (or at start).
     let lowercased = name.lowercased()
     var cutIndex: String.Index? = nil
@@ -120,7 +140,7 @@ enum FileNameCleaner {
       name = String(name[name.startIndex..<cut])
     }
 
-    // 5. Trim brackets/whitespace/separators at both ends.
+    // 6. Trim brackets/whitespace/separators at both ends.
     name = name.trimmingCharacters(in: CharacterSet(charactersIn: " ._-[]【】()（）"))
     // Collapse a leading/trailing dot-run left by truncation.
     while name.hasPrefix(".") || name.hasPrefix("_") || name.hasPrefix("-") {
@@ -131,15 +151,15 @@ enum FileNameCleaner {
     }
     name = name.trimmingCharacters(in: .whitespaces)
 
-    // 6. If episode detected, set tvShowId to the cleaned name (caller may override with dir name).
+    // 7. If episode detected, set tvShowId to the cleaned name (caller may override with dir name).
     let tvShowId: String? = episodeNumber != nil ? name : nil
 
-    // 7. Fallback: if everything got stripped, use the original (minus extension).
+    // 8. Fallback: if everything got stripped, use the original (minus extension).
     if name.isEmpty {
       name = (rawName as NSString).deletingPathExtension
     }
 
-    return FileNameCleanResult(cleanedName: name, episodeNumber: episodeNumber, tvShowId: tvShowId)
+    return FileNameCleanResult(cleanedName: name, episodeNumber: episodeNumber, tvShowId: tvShowId, year: year)
   }
 
   /// Clean a name intended for display only (no episode/tvShow extraction). Used for TV show

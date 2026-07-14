@@ -370,6 +370,27 @@ return -1;\
       duration = pFormatCtx->duration;
   }
 
+  // stream info: `avformat_open_input` already populates each stream's `codecpar` from the
+  // container header for most formats, so width/height/codec can be read WITHOUT forcing
+  // `avformat_find_stream_info`. We intentionally do NOT call find_stream_info unconditionally
+  // here: it reads stream data and crashed with EXC_BAD_ACCESS inside libavformat (FFmpeg 7.0.1)
+  // on NAS-mounted files during QA. The duration<=0 branch above retains the original IINA
+  // behavior (probe only when the container lacks duration). If a container's codecpar is not
+  // populated after open_input, the width/height/codec keys are simply absent from the returned
+  // dict — callers tolerate missing keys per contract #1.
+
+  // Extract video stream metadata (width/height/codec/bit_rate) from the first video stream's
+  // `codecpar`. Absent from the returned dict if no video stream is found (callers must tolerate
+  // missing keys).
+  AVCodecParameters *videoCodecPar = NULL;
+  for (unsigned int i = 0; i < pFormatCtx->nb_streams; i++) {
+    AVStream *stream = pFormatCtx->streams[i];
+    if (stream->codecpar && stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+      videoCodecPar = stream->codecpar;
+      break;
+    }
+  }
+
   // In addition to the duration IINA is interested metadata tags, especially the title tag. In many
   // formats metadata is attached to the container itself. However in Ogg files metadata is attached
   // to the stream. If the title tag is not found in the metadata from the container then search for
@@ -404,6 +425,27 @@ return -1;\
       continue;
     }
     info[key] = value;
+  }
+
+  // Add video-stream metadata keys (contract #1). Absent if no video stream.
+  if (videoCodecPar) {
+    if (videoCodecPar->width > 0) {
+      info[@"@iina_width"] = [NSNumber numberWithInt:videoCodecPar->width];
+    }
+    if (videoCodecPar->height > 0) {
+      info[@"@iina_height"] = [NSNumber numberWithInt:videoCodecPar->height];
+    }
+    // Codec name via avcodec_get_name (works without a decoder being available).
+    const char *codecNameC = avcodec_get_name(videoCodecPar->codec_id);
+    if (codecNameC) {
+      NSString *codecName = [NSString stringWithCString:codecNameC encoding:NSUTF8StringEncoding];
+      if (codecName) {
+        info[@"@iina_video_codec"] = codecName;
+      }
+    }
+    if (videoCodecPar->bit_rate > 0) {
+      info[@"@iina_bit_rate"] = [NSNumber numberWithLongLong:videoCodecPar->bit_rate];
+    }
   }
 
   avformat_close_input(&pFormatCtx);
