@@ -41,3 +41,27 @@
 **Scenario**: 媒体库「继续观看」列表永远为空（用户播放过多个视频却看不到）
 **Lesson**: `PlaybackHistory.played` 在 `HistoryController.add` 经 `init(url:duration:name:title:mpvMd5:)` **硬编码 `played=true`**（PlaybackHistory.swift:87），且全代码库无任何处设 false——上游 IINA 从未真正使用该字段。用它做过滤（`if entry.played { continue }`）会把**全部**历史排除。正确「已看完」判据：进度 ≥ duration × 0.95。诊断关键：实测 history.plist 所有条目 played 全 true 即可定位（`plutil -convert xml1 ... | grep -A1 IINAPHPlayed`）
 **Evidence**: `continueWatchingItems` 的 played 过滤致 19 条历史全排除；实测 history.plist played=true 19/19；删过滤改用进度<95% 判据后列表恢复（核对锚点：2026-07-13 commit 8ad46797）
+
+### [2026-07-15] avformat_find_stream_info 无条件调用致 NAS 文件 EXC_BAD_ACCESS 崩溃
+<!-- tags: iina, ffmpeg, libavformat, find-stream-info, nas, crash, exc-bad-access, probe -->
+**Scenario**: 媒体库扩展 `FFmpegController.probeVideoInfoForFile:` 读视频流 codecpar，为"保证填充"在 open_input 后无条件补调 `avformat_find_stream_info` → IINA 启动后 probe 队列对 NAS 挂载文件 probe 时 EXC_BAD_ACCESS（SIGSEGV @ avformat_find_stream_info+696，FFmpeg 7.0.1 libavformat.61）
+**Lesson**: `avformat_open_input` 已为多数容器从 header 填充 codecpar，width/height/codec 可直接读，**不需**强制 `find_stream_info`。`find_stream_info` 会读流数据，对 NAS（smb/nfs）文件 + 某些容器在 FFmpeg 7.0.1 触发内部 EXC_BAD_ACCESS。原 IINA 逻辑（duration<=0 才调）是有意为之的稳定边界，不要为"保证填充"改成无条件调用；codecpar 读不到时让 key absent（契约允许），而非冒险 find_stream_info。诊断：crash report .ips 解析 triggered thread backtrace（`iina.media.library.probe` 队列 → `avformat_find_stream_info`）
+**Evidence**: 蓝队初版无条件 find_stream_info 致 IINA 启动 ~5s 崩溃（IINA-2026-07-14-002421.ips，pid 45472）；删无条件调用、保留 duration<=0 才调后 IINA 持续运行无 crash（核对锚点：2026-07-15 commit a62ac9cf FFmpegController.m:373-380）
+
+### [2026-07-15] 懒加载 + 通知 reload 无限循环致列表闪烁（probeMetadata probedKeys）
+<!-- tags: iina, medialibrary, probemetadata, notification, reload, flicker, loop, lazy-loading -->
+**Scenario**: 卡片 `configure` 触发 `probeMetadata` 懒加载，probe 完发 `metadataProbedNotification` → ViewController reload visible items → cell `configure` 再触发 `probeMetadata`。若 probe 失败（NAS I/O 抖动/无视频流）`item.height` 永远 nil，守卫 `if item.height != nil { return }` 不 return → 反复 probe；且 `changed = item.year != nil`（year 从文件名填了就算 changed）→ 反复发通知 → 列表不停 reload 闪烁
+**Lesson**: 懒加载 + 通知刷新模式须防"失败重试循环"——probe 完成不论成败都要标记（`probedKeys` Set），下次跳过；`changed` 只在**真新增字段**时 true（year 已存在不再算 changed）。仅靠 `probingKeys`（正在 probe）去重不够，失败后 key 移除会重试。诊断：用户反馈"列表一直闪" = 通知风暴 + reload 循环
+**Evidence**: 加 `probedKeys`（probe 完插入，开头 `probedKeys.contains(key)` 跳过）后闪烁消除（核对锚点：2026-07-15 commit a62ac9cf MediaLibraryStore.probeMetadata）
+
+### [2026-07-15] CALayer 阴影无 shadowPath 致 NSCollectionView 滚动卡顿
+<!-- tags: iina, appkit, calayer, shadow, shadowpath, performance, scroll, nscollectionview -->
+**Scenario**: NSCollectionView 卡片每张配 CALayer 阴影（shadowOpacity/shadowRadius）但无 shadowPath，滚动 + hover 动画时每张可见卡片每帧实时高斯模糊重算阴影，主线程卡顿
+**Lesson**: CALayer 阴影**必须设 shadowPath**（`CGPath(roundedRect:cornerWidth:cornerHeight:transform:)` 匹配 cornerRadius）。无 shadowPath 时 AppKit 每帧重新光栅化阴影模糊（O(卡片数 × 模糊半径)），是 NSCollectionView 滚动卡顿的经典源；shadowPath 缓存阴影形状只绘一次。注意 Swift `CGPath(roundedRect:...)` 构造器 `transform` 参数必填，传 `nil`。在 `viewDidLayout` 设（bounds 变时更新）
+**Evidence**: 加 shadowPath 后滚动流畅（用户反馈"滚动很卡"消除）（核对锚点：2026-07-15 commit a62ac9cf MediaItemCollectionViewItem.viewDidLayout）
+
+### [2026-07-15] NSCollectionView cell hover 滚动时 mouseExited 漏触发 + trackingArea rect/inVisibleRect 冲突
+<!-- tags: iina, appkit, nstrackingarea, hover, mouseexited, nscollectionview, scroll -->
+**Scenario**: 卡片 NSTrackingArea hover 态，鼠标离开后 hover 不恢复（抬起/浮层保持）。根因：① `NSTrackingArea(rect: view.bounds, options: [.inVisibleRect,...])` rect 传 view.bounds 与 .inVisibleRect 冲突（.inVisibleRect 模式 rect 应为 .zero，AppKit 用 visibleRect）→ 事件不可靠；② 滚动时 cell 位移，鼠标屏幕未动但离开 cell bounds，mouseExited 不触发（cell 移动非鼠标移动）
+**Lesson**: NSTrackingArea + .inVisibleRect 时 rect 传 .zero（不要传 view.bounds）；滚动场景 mouseExited 会漏触发，需在 `viewDidLayout` 加兜底——若 isHovering 且 `NSEvent.mouseLocation` 转换到 view 坐标不在 bounds 则 reset；cell 复用 `prepareForReuse` 也 reset。三重保险（rect .zero + viewDidLayout 鼠标校验 + prepareForReuse）覆盖静止/滚动/复用场景
+**Evidence**: 三重修复后 hover 鼠标离开恢复正常（核对锚点：2026-07-15 commit a62ac9cf MediaItemCollectionViewItem installTrackingArea/viewDidLayout/prepareForReuse）
