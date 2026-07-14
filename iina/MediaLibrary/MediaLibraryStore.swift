@@ -54,9 +54,17 @@ final class MediaLibraryStore: NSObject {
   /// Background queue for scanning.
   private let scanQueue = DispatchQueue(label: "iina.media.library.scan", qos: .userInitiated)
 
-  /// Lightweight serial queue for lazy metadata probing (P3). Serial so we don't stampede the NAS
-  /// with 1000 concurrent avformat_open_input calls; `userInitiated` keeps cards responsive.
-  private let probeQueue = DispatchQueue(label: "iina.media.library.probe", qos: .userInitiated)
+  /// 并发限宽（4）的 OperationQueue，用于惰性元数据探测。原来用 serial DispatchQueue 时，单个
+  /// NAS 慢文件的 `avformat_open_input` 会卡死整条队列、所有卡片元数据长期空白；改并发后单慢文件
+  /// 不再阻塞其他 item 的探测完成（P0-3）。`probingKeys`/`probedKeys` 已防重探 stampede，
+  /// 因此并发数可控。`userInitiated` 保持卡片响应。
+  private let probeQueue: OperationQueue = {
+    let q = OperationQueue()
+    q.name = "iina.media.library.probe"
+    q.qualityOfService = .userInitiated
+    q.maxConcurrentOperationCount = 4
+    return q
+  }()
 
   /// Notification posted when a single item's metadata has been lazily probed and updated. The
   /// object is the `MediaItem`. Observers (e.g. the grid) refresh the corresponding card.
@@ -64,7 +72,7 @@ final class MediaLibraryStore: NSObject {
 
   /// Set of mpvMd5 keys currently in-flight on `probeQueue`, to avoid re-probing the same item
   /// while a probe is pending. Guarded by `probeLock`.
-  private var probingKeys: Set<String> = []
+  internal var probingKeys: Set<String> = []  // @testable seam（红队 ACC-preserve 防循环）；写仍由 probeLock 守卫
   private let probeLock = NSLock()
 
   /// True while a rescan is in progress (UI shows "扫描中…" instead of the empty state).
@@ -310,7 +318,7 @@ final class MediaLibraryStore: NSObject {
   /// Keys for items whose metadata probe has completed (success or failure). Prevents re-probing
   /// items whose probe yielded no height (NAS I/O hiccup / no video stream) — without this, every
   /// configure would re-probe and re-post metadataProbedNotification → reload → flicker loop.
-  private var probedKeys: Set<String> = []
+  internal var probedKeys: Set<String> = []  // @testable seam（红队 ACC-preserve 防循环）；写仍由 probeLock 守卫
 
   func probeMetadata(for item: MediaItem) {
     // Already probed (height present, or previously attempted): nothing to do.
@@ -325,44 +333,54 @@ final class MediaLibraryStore: NSObject {
     probingKeys.insert(key)
     probeLock.unlock()
 
-    probeQueue.async { [weak self] in
+    // 后台块只做两件事：慢 IO（probeVideoInfo）+ probeLock 内簿记（移除 probingKeys / 标记
+    // probedKeys）。**完全不碰任何 MediaItem var 字段**（width/height/year/videoCodec/
+    // bitrate/duration 全部留给主线程的 applyProbeResult 读写）——避免与主线程的 configure /
+    // saveIndex 竞态（P0-1 / C1 / C1b）。仅 `item.url.path`（let，init 后不可变）在后台读。
+    probeQueue.addOperation { [weak self] in
       guard let self = self else { return }
-      // Always fill year from filename first (cheap, always available).
-      if item.year == nil {
-        let cleaned = FileNameCleaner.clean(item.rawName)
-        item.year = cleaned.year
-      }
-      // Probe via libavformat. This call is the ObjC class method; returns nil on failure.
       let info = FFmpegController.probeVideoInfo(forFile: item.url.path)
-      var changed = item.year != nil
-      if let info = info as? [String: Any] {
-        if let w = info["@iina_width"] as? Int { item.width = w; changed = true }
-        if let w = info["@iina_width"] as? NSNumber { item.width = w.intValue; changed = true }
-        if let h = info["@iina_height"] as? Int { item.height = h; changed = true }
-        if let h = info["@iina_height"] as? NSNumber { item.height = h.intValue; changed = true }
-        if let codec = info["@iina_video_codec"] as? String { item.videoCodec = codec; changed = true }
-        if let br = info["@iina_bit_rate"] as? Int { item.bitrate = br; changed = true }
-        if let br = info["@iina_bit_rate"] as? NSNumber { item.bitrate = br.intValue; changed = true }
-        if let dur = info["@iina_duration"] as? Double, dur > 0 {
-          item.duration = dur; changed = true
-        }
-        if let dur = info["@iina_duration"] as? NSNumber, dur.doubleValue > 0 {
-          item.duration = dur.doubleValue; changed = true
-        }
-      }
-
       self.probeLock.lock()
       self.probingKeys.remove(key)
       self.probedKeys.insert(key)
       self.probeLock.unlock()
-
-      guard changed else { return }
+      // 跳主线程应用：item 所有 var 字段只在主线程被写（C1）。
       DispatchQueue.main.async {
-        // Persist + notify on the main thread (saveIndex touches items; observers expect main).
-        self.saveIndex()
-        NotificationCenter.default.post(name: MediaLibraryStore.metadataProbedNotification, object: item)
+        self.applyProbeResult(item: item, info: info)
       }
     }
+  }
+
+  /// 主线程应用探测结果（P0-1）。**仅主线程**被调用：写入 item 的 year/width/height/
+  /// videoCodec/bitrate/duration，必要时持久化并发通知。**不持 probeLock**（saveIndex 较重，
+  /// 不应在锁内执行；簿记已在后台块完成）。
+  private func applyProbeResult(item: MediaItem, info: Any?) {
+    // 始终先用文件名补 year（廉价、总有）。
+    if item.year == nil {
+      let cleaned = FileNameCleaner.clean(item.rawName)
+      item.year = cleaned.year
+    }
+    var changed = item.year != nil
+    // 通过 libavformat 探测；info 为 nil 则静默降级（字段保持 nil，不崩溃）。
+    if let info = info as? [String: Any] {
+      if let w = info["@iina_width"] as? Int { item.width = w; changed = true }
+      if let w = info["@iina_width"] as? NSNumber { item.width = w.intValue; changed = true }
+      if let h = info["@iina_height"] as? Int { item.height = h; changed = true }
+      if let h = info["@iina_height"] as? NSNumber { item.height = h.intValue; changed = true }
+      if let codec = info["@iina_video_codec"] as? String { item.videoCodec = codec; changed = true }
+      if let br = info["@iina_bit_rate"] as? Int { item.bitrate = br; changed = true }
+      if let br = info["@iina_bit_rate"] as? NSNumber { item.bitrate = br.intValue; changed = true }
+      if let dur = info["@iina_duration"] as? Double, dur > 0 {
+        item.duration = dur; changed = true
+      }
+      if let dur = info["@iina_duration"] as? NSNumber, dur.doubleValue > 0 {
+        item.duration = dur.doubleValue; changed = true
+      }
+    }
+
+    guard changed else { return }
+    saveIndex()
+    NotificationCenter.default.post(name: MediaLibraryStore.metadataProbedNotification, object: item)
   }
 
   // MARK: Helpers
@@ -371,5 +389,15 @@ final class MediaLibraryStore: NSObject {
   /// if no player is available (matching mpv's default).
   private func currentIgnorePath() -> Bool {
     return PlayerCore.activeOrNew.ignorePathInWatchLaterConfig
+  }
+
+  // MARK: @testable 契约 seam（红队验收测试用；不影响生产行为）
+
+  /// probe 并发限宽（C4 / P0-3）。红队 ACC-P0-3 断言 == 4。
+  internal var probeQueueMaxConcurrent: Int { return probeQueue.maxConcurrentOperationCount }
+
+  /// item 的 probe key（mpvMd5）。红队 ACC-preserve 用以比对 probedKeys/probingKeys。
+  internal func probeKey(for item: MediaItem) -> String {
+    return Utility.mpvWatchLaterMd5(item.url, currentIgnorePath())
   }
 }

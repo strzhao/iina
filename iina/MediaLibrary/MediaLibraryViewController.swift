@@ -39,6 +39,17 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
   var currentCategory: MediaCategory = .movie
   var currentFilter: String = ""
 
+  /// 100ms tail-coalesce 缓冲：probe 结果通知到达后入此集合，窗口内合并为至多一次
+  /// `reconfigureVisibleItems(for:)`。P0-1（主线程应用）+ P0-3（并发限宽）会让单位时间内
+  /// 到达的 `metadataProbedNotification` 变多，原先每次通知都重配全部 visible items 会造成
+  /// 风暴式主线程 reload、中断滚动。**每个到达 item 必入集合、必在某次 flush 被重配**（C5，
+  /// 不丢更新）。主线程访问；MediaItem 是 NSObject 子类，Hashable 默认 identity 语义。
+  /// @testable 契约 seam（红队 ACC-throttle 验证 C5 不丢更新）。主线程访问。
+  internal var pendingProbedItems: Set<MediaItem> = []
+  private var metadataProbedCoalesceScheduled = false
+  /// @testable 契约 seam（红队 ACC-throttle 验证窗口合并 ≤1 次）。每次 reconfigureVisibleItems 自增。
+  internal private(set) var reconfigureCallCount: Int = 0
+
   /// Height constraint for `continueWatchingView`, toggled in `refresh()` so the strip doesn't
   /// reserve 130pt when empty (Auto Layout keeps a hidden view's frame, so `isHidden` alone
   /// would leave a blank gap at the top).
@@ -228,28 +239,47 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
     DispatchQueue.main.async { [weak self] in self?.refresh() }
   }
 
-  /// A lazy metadata probe completed (P3). Re-configure only the currently-visible grid items so
-  /// their cards pick up the newly-probed year/resolution/codec without a full grid reload (which
-  /// would interrupt scrolling). Coalesces rapid-fire probes.
+  /// A lazy metadata probe completed (P3). 100ms tail-coalesce：每个到达 item 必入集合（不丢），
+  /// 窗口内合并为至多一次 `reconfigureVisibleItems(for:)`，避免风暴式主线程 reload 中断滚动
+  /// （C5）。
   @objc private func metadataProbed(_ note: Notification) {
     DispatchQueue.main.async { [weak self] in
       guard let self = self else { return }
-      let visible = self.collectionView.visibleItems()
-      guard !visible.isEmpty else { return }
-      // Re-run configure on each visible item so subtitle/meta pick up the probed fields.
-      for case let cell as MediaItemCollectionViewItem in visible {
-        guard let item = cell.mediaItem else { continue }
-        let ignorePath = PlayerCore.activeOrNew.ignorePathInWatchLaterConfig
-        // Re-derive the displayName/episodeCount for TV-show collection cards.
-        if let idx = self.displayedItems.firstIndex(where: { $0 === item }),
-           idx < self.displayedGroupCounts.count {
-          cell.configure(with: item,
-                         ignorePath: ignorePath,
-                         displayName: item.tvShowId ?? item.cleanedName,
-                         episodeCount: self.displayedGroupCounts[idx])
-        } else {
-          cell.configure(with: item, ignorePath: ignorePath)
-        }
+      // 每个 item 必入集合（即便已调度 flush 也会带上，不丢更新）。
+      if let item = note.object as? MediaItem {
+        self.pendingProbedItems.insert(item)
+      }
+      if self.metadataProbedCoalesceScheduled { return }
+      self.metadataProbedCoalesceScheduled = true
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+        guard let self = self else { return }
+        self.metadataProbedCoalesceScheduled = false
+        let changed = self.pendingProbedItems
+        self.pendingProbedItems.removeAll()
+        guard !changed.isEmpty else { return }
+        self.reconfigureVisibleItems(for: changed)
+      }
+    }
+  }
+
+  /// 仅重配 visible 中 mediaItem ∈ changed 的 cell，让 subtitle/meta 拾取新探测的
+  /// year/resolution/codec（不做全网格 reload，避免中断滚动）。
+  private func reconfigureVisibleItems(for changed: Set<MediaItem>) {
+    reconfigureCallCount += 1
+    let visible = collectionView.visibleItems()
+    guard !visible.isEmpty else { return }
+    let ignorePath = PlayerCore.activeOrNew.ignorePathInWatchLaterConfig
+    for case let cell as MediaItemCollectionViewItem in visible {
+      guard let item = cell.mediaItem, changed.contains(item) else { continue }
+      // Re-derive the displayName/episodeCount for TV-show collection cards.
+      if let idx = displayedItems.firstIndex(where: { $0 === item }),
+         idx < displayedGroupCounts.count {
+        cell.configure(with: item,
+                       ignorePath: ignorePath,
+                       displayName: item.tvShowId ?? item.cleanedName,
+                       episodeCount: displayedGroupCounts[idx])
+      } else {
+        cell.configure(with: item, ignorePath: ignorePath)
       }
     }
   }

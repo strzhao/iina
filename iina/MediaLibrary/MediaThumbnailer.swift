@@ -101,6 +101,12 @@ final class MediaThumbnailer: NSObject {
   private let lock = NSLock()
   private let queue = DispatchQueue(label: "iina.media.thumbnailer", qos: .userInitiated)
 
+  /// 池满时的 FIFO 待办队列（`lock` 守卫）。持有完整 `Job`（含 completion），slot 释放时由
+  /// `dispatchNextPending()` 取出执行（P0-2）。**永不丢任务**：原 `dispatch` 的 `attempt>=4`
+  /// 丢任务分支会让大库慢 NAS 永久占位图。**不做 dedup**：dedup 会让被丢请求的 completion
+  /// 永不触发 → 永久占位；stale 回调由 cell 侧 `thumbnailToken` 防。
+  private var pending: [Job] = []
+
   private override init() {
     Logger.log("MediaThumbnailer.init start, poolSize=\(MediaThumbnailer.poolSize)", level: .warning)
     super.init()
@@ -142,7 +148,7 @@ final class MediaThumbnailer: NSObject {
         DispatchQueue.main.async { completion(nil) }
         return
       }
-      self.dispatch(url: url, ignorePath: ignorePath, cacheName: cacheName, cacheURL: cacheURL, completion: completion, attempt: 0)
+      self.dispatch(url: url, ignorePath: ignorePath, cacheName: cacheName, cacheURL: cacheURL, completion: completion)
     }
   }
 
@@ -155,39 +161,63 @@ final class MediaThumbnailer: NSObject {
 
   // MARK: Internals
 
-  private func dispatch(url: URL, ignorePath: Bool, cacheName: String, cacheURL: URL, completion: @escaping (NSImage?) -> Void, attempt: Int) {
-    let slot = lock.withLock { slots.first(where: { $0.job == nil }) }
-    if let slot = slot {
-      startJob(on: slot, url: url, ignorePath: ignorePath, cacheName: cacheName, cacheURL: cacheURL, completion: completion)
-    } else if attempt < 4 {
-      // All slots busy — retry after a short backoff.
-      queue.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-        self?.dispatch(url: url, ignorePath: ignorePath, cacheName: cacheName, cacheURL: cacheURL, completion: completion, attempt: attempt + 1)
-      }
+  /// 构造 `Job` 并投递：有空 slot 则立即占位、锁外启动；否则入 FIFO pending 队列等待 slot 释放
+  /// 驱动 dequeue。**不做 dedup**，**永不因池满丢任务**（P0-2 / C2）。
+  private func dispatch(url: URL, ignorePath: Bool, cacheName: String, cacheURL: URL, completion: @escaping (NSImage?) -> Void) {
+    let job = Job(url: url, ignorePath: ignorePath, cacheName: cacheName, cacheURL: cacheURL, completion: completion)
+    var assigned: PoolSlot? = nil
+    lock.lock()
+    if let slot = slots.first(where: { $0.job == nil }) {
+      slot.job = job
+      assigned = slot
     } else {
-      DispatchQueue.main.async { completion(nil) }
+      pending.append(job)
+    }
+    lock.unlock()
+    // 恒锁外启动（startJob 内部会再 lock，NSLock 非递归，持锁调用必死锁）——C3。
+    if let slot = assigned {
+      startJob(on: slot, job: job)
     }
   }
 
-  private func startJob(on slot: PoolSlot, url: URL, ignorePath: Bool, cacheName: String, cacheURL: URL, completion: @escaping (NSImage?) -> Void) {
-    let job = Job(url: url, ignorePath: ignorePath, cacheName: cacheName, cacheURL: cacheURL, completion: completion)
+  /// 取 pending 队首任务并在空 slot 上启动。lock 内只做"取"（取 pending 首 + 占空 slot），**解锁
+  /// 后锁外调 startJob**（C3）。无 pending 或无空 slot 则什么都不做。
+  private func dispatchNextPending() {
+    var nextJob: Job? = nil
+    var assignedSlot: PoolSlot? = nil
     lock.lock()
-    slot.job = job
+    if !pending.isEmpty, let slot = slots.first(where: { $0.job == nil }) {
+      nextJob = pending.removeFirst()
+      slot.job = nextJob
+      assignedSlot = slot
+    }
     lock.unlock()
+    // 恒锁外启动，防 NSLock 重入死锁（B4 / C3）。
+    if let job = nextJob, let slot = assignedSlot {
+      startJob(on: slot, job: job)
+    }
+  }
 
+  /// 在已占位的 slot 上启动 FFmpegController 生成。`job` 由调用方在外部构造并已 `slot.job = job`。
+  /// 仅设置超时与触发 FFmpeg 生成（锁内只读 `slot.job` 做超时判定）。
+  private func startJob(on slot: PoolSlot, job: Job) {
+    let url = job.url
     // Timeout: degrade to nil if the delegate does not fire in time.
     queue.asyncAfter(deadline: .now() + MediaThumbnailer.timeout) { [weak self, weak slot] in
       guard let self = self, let slot = slot else { return }
+      var cb: ((NSImage?) -> Void)? = nil
       self.lock.lock()
       let active = slot.job != nil && !slot.job!.timedOut
       if active, slot.job?.url.path == url.path {
         slot.job?.timedOut = true
-        let cb = slot.job?.completion
+        cb = slot.job?.completion
         slot.job = nil
-        self.lock.unlock()
-        if let cb = cb { DispatchQueue.main.async { cb(nil) } }
-      } else {
-        self.lock.unlock()
+      }
+      self.lock.unlock()
+      if let cb = cb {
+        DispatchQueue.main.async { cb(nil) }
+        // slot 已释放，驱动 pending 队列（必须在 unlock 之后）——C3。
+        self.dispatchNextPending()
       }
     }
 
@@ -234,6 +264,8 @@ extension MediaThumbnailer {
       }
     }
     DispatchQueue.main.async { job.completion(picked) }
+    // slot 已释放，驱动 pending 队列（必须在 unlock 之后）——C3。
+    dispatchNextPending()
   }
 
   // MARK: Smart frame selection
