@@ -12,7 +12,7 @@
 //
 
 import XCTest
-@testable import iina
+@testable import IINA
 
 final class MediaItemAcceptanceTests: XCTestCase {
 

@@ -50,13 +50,22 @@ xcodebuild -project iina.xcodeproj -scheme iina -configuration Debug -destinatio
 
 ## 测试现状（重要）
 
-`tests/*.acceptance.test.swift`（10 个）是 **XCTest 风格契约测试 + `@testable import iina`**，但当前**不可运行**：
-- 未纳入 xcodeproj test target（无 `xcodebuild test` 入口）
-- 依赖 `MediaLibraryStore.setItemsForTesting` 夹具（已补）
-- 访问 VC/Item 成员需 internal 可见性（关键成员已改 internal）
-- swiftc 独立编译缺 XCTest 模块
+已新增 **`iinaTests` unit-test target**（host 在 IINA.app），通过 `xcodeproj` Ruby gem 程序化注入 pbxproj。
 
-**纯逻辑验证**用 `swiftc -typecheck` + `main.swift`（允许顶层代码）独立编译，绕过 app 链接。GUI 行为用 marker 文件（`try? "x".write(toFile:)` 同步写）诊断执行链路。
+- **运行方式**：
+  ```bash
+  xcodebuild test -project iina.xcodeproj -scheme iina -configuration Debug -destination 'platform=macOS'
+  # 或显式开覆盖率：-enableCodeCoverage YES
+  ```
+- **当前结果**：23 个测试通过（FileNameCleaner / MediaItem acceptance + TestHarnessAcceptance canary），代码覆盖率 ~11%
+- **模块名是大写 `IINA`**（PRODUCT_MODULE_NAME=IINA），测试须 `@testable import IINA`，不是 `import iina`
+- test target host 在 IINA.app（TEST_HOST/BUNDLE_LOADER），libmpv 符号从宿主解析，无需重链 deps
+- scheme 已开 `codeCoverage` + `TSan` 声明；TSan 全 app 运行因 libmpv 预编译未插桩为**已知局限**（仅声明级，实际 TSan 不能在 libmpv 内部报错）
+- 独立构建配置 `Configs/iinaTests.xcconfig`（显式声明 HEADER/LIBRARY_SEARCH_PATHS，Shared.xcconfig 不含这些；不设 bridging header；仅 Debug 单档）
+- **仍有 11 个 `tests/*.acceptance.test.swift` 未接入**（依赖 NAS/ffmpeg IO 或完整 app 启动环境）。未来接入时须把 `@testable import iina` 改为 `@testable import IINA`（模块名大写），并补齐夹具可见性
+- 访问 VC/Item 成员需 internal 可见性（关键成员已改 internal），夹具 `MediaLibraryStore.setItemsForTesting` 已补
+
+**纯逻辑验证**（脱离 XCTest 时）仍可用 `swiftc -typecheck` + `main.swift`（允许顶层代码）独立编译，绕过 app 链接。GUI 行为用 marker 文件（`try? "x".write(toFile:)` 同步写）诊断执行链路。
 
 ## autopilot 约定
 

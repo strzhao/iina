@@ -1,0 +1,33 @@
+//
+//  iinaTests.xcconfig
+//  iina
+//
+//  iinaTests unit-test bundle build settings.
+//  Inherits SWIFT_VERSION / deployment / SDKROOT / warning switches from Shared.xcconfig.
+//  Does NOT include iina.xcconfig (that file carries SWIFT_OBJC_BRIDGING_HEADER, which would
+//  resolve to a non-existent iinaTests/iinaTests-Bridging-Header.h). Search paths are declared
+//  explicitly here because Shared.xcconfig does not contain them (empirically verified).
+//
+
+#include? "Shared.xcconfig"
+
+// Explicit search paths (Shared.xcconfig does NOT carry these; iina.xcconfig does but cannot
+// be included due to its bridging-header setting). Required so the app module's Clang headers
+// transitively referenced during @testable import resolution resolve.
+HEADER_SEARCH_PATHS = $(inherited) $(SRCROOT)/deps/include
+LIBRARY_SEARCH_PATHS = $(inherited) $(SRCROOT)/deps/lib
+
+// Test bundle identity
+PRODUCT_NAME = iinaTests
+PRODUCT_BUNDLE_IDENTIFIER = com.colliderli.$(PRODUCT_NAME:rfc1034identifier)
+GENERATE_INFOPLIST_FILE = YES
+
+// @testable import needs testability; coverage instrumentation on.
+ENABLE_TESTABILITY = YES
+CLANG_ENABLE_CODE_COVERAGE = YES
+
+// Host the test bundle inside IINA.app so libmpv / libav* symbols resolve from the host at
+// runtime (test target links NO deps dylibs — contract C5).
+TEST_HOST = $(BUILT_PRODUCTS_DIR)/IINA.app/Contents/MacOS/IINA
+BUNDLE_LOADER = $(TEST_HOST)
+LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks @loader_path/../Frameworks

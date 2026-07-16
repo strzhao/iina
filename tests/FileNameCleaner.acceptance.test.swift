@@ -17,8 +17,8 @@
 
 import XCTest
 // 注：蓝队负责将本文件接入 iina test target；import 语句按工程实际 module 名调整。
-// 此处假设主 target 模块名为 iina（与现有 Swift 文件同 module）。
-@testable import iina
+// 实证 PRODUCT_MODULE_NAME = IINA（大写），故 @testable import IINA。
+@testable import IINA
 
 final class FileNameCleanerAcceptanceTests: XCTestCase {
 

@@ -44,6 +44,19 @@ enum FileNameCleaner {
     #"高清影视.*"#,
   ]
 
+  /// Bracketed annotations to strip (audio/language/release tags), e.g.
+  /// `[国语配音+中文字幕]`, `[全8集]`, `[GB]`. These never form part of a display title.
+  /// Episode info inside brackets (e.g. `[全8集]`) is parsed separately via `episodePatterns`
+  /// before this strip runs, so removing the bracket here is safe.
+  private static let bracketAnnotationPattern = #"\[[^\]]*\]"#
+
+  /// Chinese→English alias boundary: a separator (`.`/`_`/`-`/space) followed by an ASCII letter
+  /// run, i.e. where a Chinese title transitions to its English alias (e.g.
+  /// `本日公休.Day.Off`, `怪奇物语.第五季.Stranger.Things`). We truncate the display title here so
+  /// the Chinese title is preserved without the trailing alias. Detection runs *after* episode
+  /// extraction so `S05E01`/episode digits are already captured.
+  private static let chineseToEnglishAliasPattern = #"[._\- ][A-Za-z]"#
+
   /// Episode number patterns. Captures the episode number in group 1.
   /// Order matters: `S\d+E\d+` is checked before bare `E\d+`.
   private static let episodePatterns: [(pattern: String, group: Int)] = [
@@ -82,6 +95,14 @@ enum FileNameCleaner {
       if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
         name = regex.stringByReplacingMatches(in: name, range: NSRange(location: 0, length: name.utf16.count), withTemplate: "")
       }
+    }
+
+    // 2b. Strip bracketed annotations (audio/language/release tags like `[国语配音+中文字幕]`).
+    //     Safe wrt episode detection: step 3 (below) runs AFTER this strip, but episode markers
+    //     (`S05E01` / `第N集` / `EN`) live outside `[...]` brackets in practice, so stripping the
+    //     brackets does not lose episode info.
+    if let regex = try? NSRegularExpression(pattern: bracketAnnotationPattern, options: []) {
+      name = regex.stringByReplacingMatches(in: name, range: NSRange(location: 0, length: name.utf16.count), withTemplate: "")
     }
 
     // 3. Detect episode number (before suffix truncation, as patterns may contain dots/numbers).
@@ -138,6 +159,29 @@ enum FileNameCleaner {
     }
     if let cut = cutIndex {
       name = String(name[name.startIndex..<cut])
+    }
+
+    // 5b. Truncate Chinese→English alias boundary: when a CJK title is followed by a separator
+    //     and an ASCII-letter run (the English alias, e.g. `本日公休.Day.Off`, `怪奇物语.Stranger`),
+    //     keep only the leading CJK portion. This runs after suffix truncation and only fires
+    //     when the name still contains CJK characters (so a pure-English name is untouched).
+    //     We require a CJK char to precede the boundary so a leading English word isn't cut.
+    if let regex = try? NSRegularExpression(pattern: chineseToEnglishAliasPattern, options: []),
+       name.range(of: #"\p{Han}"#, options: .regularExpression) != nil {
+      let range = NSRange(location: 0, length: name.utf16.count)
+      if let match = regex.firstMatch(in: name, options: [], range: range),
+         let boundary = Range(match.range, in: name),
+         boundary.lowerBound > name.startIndex {
+        // Only cut if the character immediately before the separator-and-letter is CJK,
+        // confirming a CJK→English transition (not a separator inside an English token).
+        // The `> startIndex` guard avoids `index(before: startIndex)` crash when a sep+letter
+        // match lands at the very start of the string (no preceding char to check).
+        let preBoundaryIdx = name.index(before: boundary.lowerBound)
+        let preChar = String(name[preBoundaryIdx])
+        if preChar.range(of: #"\p{Han}"#, options: .regularExpression) != nil {
+          name = String(name[name.startIndex..<boundary.lowerBound])
+        }
+      }
     }
 
     // 6. Trim brackets/whitespace/separators at both ends.

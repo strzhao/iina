@@ -119,8 +119,11 @@ final class MediaItem: NSObject, NSSecureCoding {
       self.episodeNumber = nil
     }
     if coder.containsValue(forKey: Key.duration) {
-      let d = coder.decodeDouble(forKey: Key.duration)
-      self.duration = d > 0 ? d : nil
+      // Distinguish "no value" (key absent → nil) from a real duration of 0.0.
+      // A media file may legitimately have duration 0.0 (e.g. still being probed), and the
+      // `containsValue` guard above already handles the "absent → nil" case, so 0.0 must
+      // round-trip as 0.0 rather than collapsing to nil.
+      self.duration = coder.decodeDouble(forKey: Key.duration)
     } else {
       self.duration = nil
     }
