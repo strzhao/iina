@@ -15,14 +15,19 @@ class MediaLibraryWindowController: NSWindowController {
   private let viewController = MediaLibraryViewController()
 
   init() {
+    // Default the window to the main screen's visible frame so the grid fills the screen on
+    // first open — the old fixed 1000×680 felt cramped on large displays. The autosave name is
+    // versioned (v3) so this larger default takes effect even for users who still had a small
+    // frame cached under v1/v2; from then on AppKit remembers their manual adjustments as usual.
+    let defaultFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 1000, height: 680),
+      contentRect: defaultFrame,
       styleMask: [.titled, .closable, .resizable, .miniaturizable],
       backing: .buffered,
       defer: false
     )
     window.title = NSLocalizedString("media_library.window.title", comment: "Media Library")
-    window.setFrameAutosaveName("MediaLibraryWindow")
+    window.setFrameAutosaveName("MediaLibraryWindow_v3")
     window.minSize = NSMakeSize(720, 480)
     super.init(window: window)
 
@@ -36,6 +41,11 @@ class MediaLibraryWindowController: NSWindowController {
     }
 
     contentViewController = viewController
+    // Force the content area to the screen's visible size. Assigning contentViewController
+    // otherwise adopts the VC's loadView() placeholder frame (1000×680), shrinking the window
+    // back down regardless of the contentRect passed to NSWindow above. Done after the VC is set
+    // and after setFrameAutosaveName so a fresh autosave name records this larger default.
+    window.setContentSize(defaultFrame.size)
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
