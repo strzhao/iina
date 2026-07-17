@@ -29,6 +29,12 @@ final class MediaLibraryStore: NSObject {
   /// Notification posted when a scan completes and the store's items have been refreshed.
   static let scannedNotification = Notification.Name("iinaMediaLibraryScanned")
 
+  /// 扫描进度通知（P1-5）。`userInfo["discovered"] = Int`（累计已发现项数）。由 `rescan()`
+  /// 注入 Scanner 的 progressHandler 桥接而来，回调一律经 `DispatchQueue.main.async` post
+  /// （C6）。VC 监听此通知更新进度 label + spinner，**不触发 reloadData/reconfigureVisibleItems**
+  /// （C2）。userInfo key = "discovered"。
+  static let iinaMediaScanProgress = Notification.Name("iinaMediaScanProgress")
+
   /// Maximum number of items returned by `continueWatchingItems()`.
   private static let continueWatchingLimit = 10
 
@@ -87,6 +93,12 @@ final class MediaLibraryStore: NSObject {
 
   /// The configured media library root path. Falls back to the default NAS mount if unset.
   var rootPath: String {
+    // 测试 seam：XCUIApplication launchArguments `-mediaLibraryRootPath <path>` 注入测试媒体路径。
+    // 仅 UI 测试用（生产正常启动无此参数，走 UserDefaults 分支）。
+    if let idx = CommandLine.arguments.firstIndex(of: "-mediaLibraryRootPath"),
+       idx + 1 < CommandLine.arguments.count {
+      return CommandLine.arguments[idx + 1]
+    }
     let stored = UserDefaults.standard.string(forKey: "mediaLibraryRootPath")
     if let stored = stored, !stored.isEmpty {
       var isDir: ObjCBool = false
@@ -111,6 +123,17 @@ final class MediaLibraryStore: NSObject {
     scanQueue.async { [weak self] in
       guard let self = self else { return }
       let scanner = MediaLibraryScanner()
+      // P1-5 / B2：注入进度回调，桥接到 `.iinaMediaScanProgress` 通知。Scanner 在本 scanQueue
+      // 单线程回调（C6），此处仅做 main post（零数据层改动，不改 setItems/rebuildIndices/probe/
+      // FIFO）。节流与 finalCount flush 由 Scanner 内部保证。
+      scanner.progressHandler = { count in
+        DispatchQueue.main.async {
+          NotificationCenter.default.post(
+            name: MediaLibraryStore.iinaMediaScanProgress,
+            object: self,
+            userInfo: ["discovered": count])
+        }
+      }
       do {
         let result = try scanner.scan(root: self.rootURL)
         Logger.log("MediaLibraryStore.rescan done items=\(result.count)", level: .warning)

@@ -24,6 +24,16 @@
 **Lesson**: IINA 窗口未暴露给 System Events AX（自身 AX 实现问题，非 sandbox）。GUI 自动化绕过组合：① `CGWindowListCopyWindowInfo`（Quartz，直接读窗口服务器，按 `kCGWindowOwnerName=="IINA"` 过滤）拿窗口 bounds——比 AX 可靠；② `CGEvent` 屏幕坐标点击（不依赖 AX window 索引，但需"辅助功能"权限，自动化环境可能不生效）；③ `screencapture -x` 全屏截图 + 多模态图像分析判布局（顶部空白比例/分类控件/卡片角标）。**额外坑**：`osascript "tell app IINA to quit"` 也走 AX 对 IINA 无效，需 `kill -9 <PID>`；系统 python3 无 Quartz 模块，CGWindowList/CGEvent 须用 swift 脚本（Cocoa 原生 binding）
 **Evidence**: verify 阶段 AppleScript AX 点击报 -1719 → swift CGWindowList 定位窗口 + CGEvent 坐标点击；截图经图像分析确认视频墙布局（顶部空白 <5%、电视剧剧集集合卡片「N集」角标）
 
+### [2026-07-17] XCUITest 在 IINA 可用（纠正"AX 完全不可见"）：4 层突破
+<!-- tags: iina, xcuitest, ax, library-validation, launcharguments, testing, gui, nscollectionview, codesign, entitlements -->
+**Scenario**: 需 XCUITest 自动化验证 IINA 视频墙。初期基于 [2026-07-13] System Events AX -1719 误判"XCUITest 在 IINA 不可用 / AX 不暴露"，多轮深入修后发现 XCUITest **能**查视频墙所有卡片。
+**Lesson**: XCUITest 在 IINA 可用，需打通 4 层（前 3 层是"看不到"的真因，非 AX 本身不暴露）：
+① **library validation（非 Team ID）**：iinaUITests-Runner.app 加载 test bundle 报 `different Team IDs` 是 library validation（runner 缺 `disable-library-validation` entitlement），**与 Team ID 无关**——ad-hoc 签名下也复现，配 Team 不解决。IINA.app entitlements 已含但 XCUITest 派生的 runner **不继承**，需 iinaUITests target 显式 `CODE_SIGN_ENTITLEMENTS = iinaUITests/iinaUITests.entitlements`（含 `com.apple.security.cs.disable-library-validation` + `get-task-allow`）。这是 macOS XCUITest 个人项目的标准坑，绕过靠 entitlement 不靠证书。
+② **launchArguments seam**：XCUIApplication launch 的 IINA 不读用户已写 defaults（测试隔离），视频墙空（cells=0）。MediaLibraryStore.rootPath 加测试 seam：`CommandLine.arguments` 含 `-mediaLibraryRootPath <path>` 时返回该路径（生产正常启动无此参数，走 UserDefaults），XCUIApplication.launchArguments 注入测试媒体目录。
+③ **NSCollectionView 卡片是 Group 不是 .cells**：XCUITest `cv.cells`（iOS UICollectionView 语义）对 macOS NSCollectionView 返回 0；卡片在 AX 树是 `Group → Image + StaticText`，用 `app.images` / `app.staticTexts["m1"]` 查询。视频墙 m1-m20 + "64p" 完全可达。
+④ **waitForExistence 抗缩略图生成 flaky**：缩略图生成时序 flaky（缓存命中快/生成中慢），固定 sleep 不稳，用 `app.images.firstMatch.waitForExistence(timeout: 30)` 等生成完。
+**Evidence**: iinaUITests target（xcodeproj gem `:ui_test_bundle` 注入 + Configs/iinaUITests.xcconfig + entitlements + scheme TestableReference）+ cell/VC setAccessibilityIdentifier + MediaLibraryStore launchArguments seam → 4 test PASS（test_smoke_app_window / test_smoke_mediawall images=20 / test_humanobs_card_thumbnail m1=true / test_scan_progress_label_seam），`xcodebuild test -only-testing:iinaUITests` → TEST SUCCEEDED。**纠正 [2026-07-13]**：System Events AX 不可见（-1719），但 XCUITest（XCUIElementQuery 用不同 AX API）可见视频墙卡片。GUI 验证三套齐备：XCTest（逻辑）+ CGWindowList（渲染/像素）+ XCUITest（AX 语义）。
+
 ### [2026-07-13] 后台扫描失败保留缓存 + 自定义 Error 须暴露 underlying
 <!-- tags: iina, medialibrary, rescan, error-handling, robustness, nas, localizederror, cache -->
 **Scenario**: NAS 瞬时 I/O 抖动致 `MediaLibraryScanner.scan` 抛 Cocoa error → rescan catch 分支原把 `items/md5Index/tvShowIndex` 全清空，一次抖动让用户失去整个视频墙视图；且 `MediaLibraryError` 是 enum 未实现 LocalizedError，`localizedDescription` 吞掉 underlying，用户只见「错误1」盲盒无法诊断

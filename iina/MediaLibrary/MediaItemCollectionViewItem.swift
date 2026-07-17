@@ -30,6 +30,10 @@ class MediaItemCollectionViewItem: NSCollectionViewItem {
 
   /// The thumbnail image, filling the whole 16:9 card.
   let thumbnailView = NSImageView()
+  /// 缩略图加载占位 spinner（P2-3）。盖在 thumbnailView 上居中，缩略图生成期间可见、回调到达
+  /// （成功/失败/超时）后隐藏。`wantsLayer=true` 保证 layer-backed tree 下 indeterminate 动画刷新。
+  /// 走系统 `controlAccentColor`（明暗自适应 + 跟用户 Accent，C5），不硬编码浅色 hex。
+  let placeholderSpinner = NSProgressIndicator()
   /// Title (always visible, overlaid on bottom gradient).
   let titleLabel = NSTextField(labelWithString: "")
   /// Sub-info line "year · resolution" (always visible, overlaid).
@@ -96,6 +100,18 @@ class MediaItemCollectionViewItem: NSCollectionViewItem {
     thumbnailView.layer?.cornerRadius = container.layer?.cornerRadius ?? 8
     thumbnailView.layer?.masksToBounds = true
     container.addSubview(thumbnailView)
+
+    // 缩略图加载占位 spinner（P2-3）：盖在 thumbnailView 上居中。wantsLayer=true 保证
+    // layer-backed tree 下 indeterminate 动画刷新。controlIndicatorSize=.small 走系统强调色（C5）。
+    placeholderSpinner.style = .spinning
+    placeholderSpinner.controlSize = .small
+    placeholderSpinner.isDisplayedWhenStopped = false
+    placeholderSpinner.isIndeterminate = true
+    placeholderSpinner.wantsLayer = true
+    placeholderSpinner.translatesAutoresizingMaskIntoConstraints = false
+    placeholderSpinner.isHidden = true
+    placeholderSpinner.setAccessibilityIdentifier("placeholderSpinner")
+    container.addSubview(placeholderSpinner)
 
     // Bottom gradient overlay (transparent → dark) for title legibility.
     gradientLayer.colors = BrandColor.gradientOverlayColors
@@ -209,6 +225,9 @@ class MediaItemCollectionViewItem: NSCollectionViewItem {
       thumbnailView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
       thumbnailView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
 
+      placeholderSpinner.centerXAnchor.constraint(equalTo: thumbnailView.centerXAnchor),
+      placeholderSpinner.centerYAnchor.constraint(equalTo: thumbnailView.centerYAnchor),
+
       titleLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
       titleLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
       titleLabel.bottomAnchor.constraint(equalTo: subtitleLabel.topAnchor, constant: -1),
@@ -252,6 +271,13 @@ class MediaItemCollectionViewItem: NSCollectionViewItem {
     super.prepareForReuse()
     // A recycled cell must never inherit the previous item's hover state.
     isHovering = false
+    // P3-9 / C3：复用串味根因之一。重置缩略图相关状态——spinner 停止隐藏、thumbnailView.image
+    // 清空、mediaItem 置 nil。mediaItem=nil 防 isReconfigure guard 在 cell 复用同实例 item 时
+    // 误判跳过 thumbnail 重置（ISSUE-R2-1）。thumbnailToken 守卫不变（:66/:354）。
+    placeholderSpinner.isHidden = true
+    placeholderSpinner.stopAnimation(nil)
+    thumbnailView.image = nil
+    mediaItem = nil
   }
 
   override func viewDidLayout() {
@@ -348,11 +374,22 @@ class MediaItemCollectionViewItem: NSCollectionViewItem {
   ///     badge and hides the per-episode progress/played badges. When nil, per-episode behavior.
   func configure(with item: MediaItem, ignorePath: Bool,
                  displayName: String? = nil, episodeCount: Int? = nil) {
+    // isReconfigure guard（解 plan-reviewer BLOCKER-2，C2）：同一 item 被 reconfigureVisibleItems
+    // 重配时（如 metadataProbed 通知链），不清空 thumbnailView.image、不重显 spinner、不
+    // thumbnailToken++——只更新 subtitle/meta 文字字段，避免缩略图生成期间打破 spinner 三态。
+    // **先判后赋**：在 mediaItem = item 之前读 mediaItem 做比较（ISSUE-R2-1，C3）。
+    let isReconfigure = (mediaItem === item)
     mediaItem = item
     titleLabel.stringValue = displayName ?? item.cleanedName
-    thumbnailView.image = nil
-    thumbnailToken &+= 1
-    currentProgressRatio = 0
+    if !isReconfigure {
+      // 新 item 或首次配置：走完整 thumbnail 重置流程。spinner 在 thumbnailView.image=nil 之后、
+      // thumbnailToken++ 之前显示（生成中态）。
+      thumbnailView.image = nil
+      placeholderSpinner.isHidden = false
+      placeholderSpinner.startAnimation(nil)
+      thumbnailToken &+= 1
+      currentProgressRatio = 0
+    }
 
     // Sub-info: "year · resolution".
     subtitleLabel.stringValue = MediaItemCollectionViewItem.buildSubtitle(item: item)
@@ -386,18 +423,24 @@ class MediaItemCollectionViewItem: NSCollectionViewItem {
     view.needsLayout = true
 
     // On-demand thumbnail: cached path first (decode off the main thread to keep scroll smooth),
-    // else generate. Stale-callback guard via thumbnailToken.
-    if let thumbPath = item.thumbnailPath {
-      let token = thumbnailToken
-      DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-        let img = NSImage(contentsOf: thumbPath)
-        DispatchQueue.main.async {
-          guard let self = self, self.thumbnailToken == token else { return }
-          self.thumbnailView.image = img ?? NSImage(named: NSImage.folderName)
+    // else generate. Stale-callback guard via thumbnailToken. **isReconfigure 时跳过**——同 item
+    // 重配不重新触发缩略图加载（已有的 image / spinner 三态不被打破，C2）。
+    if !isReconfigure {
+      if let thumbPath = item.thumbnailPath {
+        let token = thumbnailToken
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+          let img = NSImage(contentsOf: thumbPath)
+          DispatchQueue.main.async {
+            guard let self = self, self.thumbnailToken == token else { return }
+            // 回调到达（成功/失败）：先隐藏 spinner 再设 image。
+            self.placeholderSpinner.isHidden = true
+            self.placeholderSpinner.stopAnimation(nil)
+            self.thumbnailView.image = img ?? NSImage(named: NSImage.folderName)
+          }
         }
+      } else {
+        requestThumbnail(ignorePath: ignorePath)
       }
-    } else {
-      requestThumbnail(ignorePath: ignorePath)
     }
 
     // Lazy metadata probe (P3): kick off a background probe for any missing fields (width/height/
@@ -412,6 +455,9 @@ class MediaItemCollectionViewItem: NSCollectionViewItem {
     let token = thumbnailToken
     MediaThumbnailer.shared.generateThumbnail(for: item.url, ignorePath: ignorePath) { [weak self] image in
       guard let self = self, self.thumbnailToken == token else { return }
+      // 回调到达（成功 image 非空 / 失败 nil）：先隐藏 spinner + stop，再设 image（C2/三态）。
+      self.placeholderSpinner.isHidden = true
+      self.placeholderSpinner.stopAnimation(nil)
       if let image = image {
         self.thumbnailView.image = image
         let cacheURL = MediaThumbnailer.cacheDirectoryURL()

@@ -23,10 +23,16 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
   private let segmentedControl = NSSegmentedControl(labels: ["电影", "电视剧", "其它"], trackingMode: .selectOne, target: nil, action: nil)
   private let searchField = NSSearchField()
   private let scrollView = NSScrollView()
-  private let collectionView: NSCollectionView
+  let collectionView: NSCollectionView
   private let flowLayout: NSCollectionViewFlowLayout
   private let emptyStateLabel = NSTextField(labelWithString: "")
   private let errorLabel = NSTextField(labelWithString: "")
+  /// 扫描进度 spinner（P1-5）。indeterminate，扫描中可见、结束隐藏。走系统强调色（C5）。
+  /// internal（非 private）供 @testable 验收测试断言控件状态（CLAUDE.md「关键成员 internal」惯例）。
+  let scanProgressSpinner = NSProgressIndicator()
+  /// 扫描进度文本（P1-5）。显示"已发现 N 项"，`secondaryLabelColor`（系统动态色，C5），字号 13。
+  /// internal 供 @testable 验收测试（同上）。
+  let scanProgressLabel = NSTextField(labelWithString: "")
 
   // MARK: State
 
@@ -152,6 +158,26 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
     errorLabel.isSelectable = true
     container.addSubview(errorLabel)
 
+    // 扫描进度 UI（P1-5）：spinner + label，与 emptyStateLabel 同中心区（spinner 上、label 下）。
+    // 走系统强调色 / secondaryLabelColor（明暗自适应，C5）。初始隐藏。
+    scanProgressSpinner.style = .spinning
+    scanProgressSpinner.controlSize = .regular
+    scanProgressSpinner.isDisplayedWhenStopped = false
+    scanProgressSpinner.isIndeterminate = true
+    scanProgressSpinner.translatesAutoresizingMaskIntoConstraints = false
+    scanProgressSpinner.isHidden = true
+    scanProgressSpinner.setAccessibilityIdentifier("scanProgressSpinner")
+    container.addSubview(scanProgressSpinner)
+
+    scanProgressLabel.translatesAutoresizingMaskIntoConstraints = false
+    scanProgressLabel.font = NSFont.systemFont(ofSize: 13)
+    scanProgressLabel.textColor = NSColor.secondaryLabelColor
+    scanProgressLabel.alignment = .center
+    scanProgressLabel.stringValue = "扫描中…"
+    scanProgressLabel.isHidden = true
+    scanProgressLabel.setAccessibilityIdentifier("scanProgressLabel")
+    container.addSubview(scanProgressLabel)
+
     // Hold the continue-watching height so refresh() can collapse it to 0 when empty.
     continueWatchingHeightConstraint = continueWatchingView.heightAnchor.constraint(equalToConstant: 130)
 
@@ -182,6 +208,15 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
       errorLabel.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
       errorLabel.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 40),
       errorLabel.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -40),
+
+      // 扫描进度 UI：spinner 与 emptyStateLabel 同中心区（centerY 偏上 14pt），label 紧贴 spinner 下方。
+      scanProgressSpinner.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
+      scanProgressSpinner.bottomAnchor.constraint(equalTo: scrollView.centerYAnchor, constant: 14),
+
+      scanProgressLabel.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
+      scanProgressLabel.topAnchor.constraint(equalTo: scanProgressSpinner.bottomAnchor, constant: 8),
+      scanProgressLabel.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 40),
+      scanProgressLabel.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -40),
     ])
 
     view = container
@@ -197,6 +232,8 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
                                            name: .iinaHistoryUpdated, object: nil)
     NotificationCenter.default.addObserver(self, selector: #selector(metadataProbed(_:)),
                                            name: MediaLibraryStore.metadataProbedNotification, object: nil)
+    NotificationCenter.default.addObserver(self, selector: #selector(scanProgressUpdated(_:)),
+                                           name: MediaLibraryStore.iinaMediaScanProgress, object: nil)
 
     // Initial render from cached index, then kick off a rescan.
     refresh()
@@ -226,6 +263,11 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
 
   @objc private func storeScanned(_ note: Notification) {
     DispatchQueue.main.async { [weak self] in
+      // 扫描结束（成功/error/空结果三分支）都隐藏进度 UI，避免卡在 spinner（C2 / scan-progress
+      // .completed-hides-progress / .error-result-still-clears / .empty-result-still-clears）。
+      self?.scanProgressSpinner.isHidden = true
+      self?.scanProgressSpinner.stopAnimation(nil)
+      self?.scanProgressLabel.isHidden = true
       if let error = note.userInfo?["error"] as? Error {
         self?.showError(error)
       } else {
@@ -234,6 +276,22 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
       self?.refresh()
     }
   }
+
+  // MARK: - scan-progress-handler
+
+  /// 扫描进度通知处理（P1-5，`.iinaMediaScanProgress`）。`userInfo["discovered"] = Int`（累计已
+  /// 发现项数）。**只改 label 文本 + spinner/label 显隐，绝不触发网格全量重建或 cell 重配**
+  /// （C2，解 BLOCKER-2：进度反馈路径不得打破 cell spinner 三态 / 触发 cell thumbnail 重置）。
+  /// Store 已在 main post，此处直接更新 UI。
+  @objc func scanProgressUpdated(_ note: Notification) {
+    let discovered = note.userInfo?["discovered"] as? Int ?? 0
+    scanProgressLabel.stringValue = "已发现 \(discovered) 项"
+    scanProgressSpinner.startAnimation(nil)
+    scanProgressSpinner.isHidden = false
+    scanProgressLabel.isHidden = false
+  }
+
+  // MARK: - scan-progress-handler-end
 
   @objc private func historyUpdated() {
     DispatchQueue.main.async { [weak self] in self?.refresh() }
@@ -307,10 +365,33 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
     collectionView.reloadData()
     continueWatchingView.update(with: cwItems)
     if displayedItems.isEmpty {
-      emptyStateLabel.stringValue = store.isScanning ? "扫描中…" : "没有媒体文件"
-      emptyStateLabel.isHidden = false
+      // P1-5：isScanning 时显示进度 spinner + label（替代静态"扫描中…"）。spinner/label 已在
+      // loadView 构造、由 scanProgressUpdated 驱动文本；此处仅在 refresh 路径上保证它们可见，
+      // 让首帧（progressHandler 尚未回调）也不空白（label 初始值 "扫描中…"，scan-progress
+      // .first-frame-non-empty-text）。
+      if store.isScanning {
+        emptyStateLabel.isHidden = true
+        scanProgressSpinner.startAnimation(nil)
+        scanProgressSpinner.isHidden = false
+        if scanProgressLabel.stringValue.isEmpty {
+          scanProgressLabel.stringValue = "扫描中…"
+        }
+        scanProgressLabel.isHidden = false
+      } else {
+        scanProgressSpinner.isHidden = true
+        scanProgressSpinner.stopAnimation(nil)
+        scanProgressLabel.isHidden = true
+        emptyStateLabel.stringValue = "没有媒体文件"
+        emptyStateLabel.isHidden = false
+      }
     } else {
       emptyStateLabel.isHidden = true
+      // 非空且有内容时，若 spinner 还残留（如扫描中刷新），隐藏。
+      if !store.isScanning {
+        scanProgressSpinner.isHidden = true
+        scanProgressSpinner.stopAnimation(nil)
+        scanProgressLabel.isHidden = true
+      }
     }
   }
 

@@ -101,6 +101,14 @@ final class MediaThumbnailer: NSObject {
   private let lock = NSLock()
   private let queue = DispatchQueue(label: "iina.media.thumbnailer", qos: .userInitiated)
 
+  /// 累计已请求的缩略图数（C7 不变量计数器，`lock` 守护）。每次 `generateThumbnail` 入口 +1。
+  /// **不 post 通知、不驱动 UI**：cell cache-hit :390 路径绕过 generateThumbnail，用计数
+  /// 驱动 UI 会在多会话下失真（解 BLOCKER-1）；仅供 C7 不变量单测与未来扩展。
+  private var totalRequestedCount: Int = 0
+  /// 累计已完成（cache-hit / handleDidGenerate 成功 / 超时降级）的缩略图数（`lock` 守护）。
+  /// 恒满足 `0 ≤ completedCount ≤ totalRequestedCount`。
+  private var completedCount: Int = 0
+
   /// 池满时的 FIFO 待办队列（`lock` 守卫）。持有完整 `Job`（含 completion），slot 释放时由
   /// `dispatchNextPending()` 取出执行（P0-2）。**永不丢任务**：原 `dispatch` 的 `attempt>=4`
   /// 丢任务分支会让大库慢 NAS 永久占位图。**不做 dedup**：dedup 会让被丢请求的 completion
@@ -133,12 +141,20 @@ final class MediaThumbnailer: NSObject {
   ///   - completion: Called on main thread with the image, or nil.
   func generateThumbnail(for url: URL, ignorePath: Bool, completion: @escaping (NSImage?) -> Void) {
     Logger.log("MediaThumbnailer.generateThumbnail for \(url.lastPathComponent)", level: .warning)
+    // 计数：入口 total++（lock 守护，C7）。先 total++ 再可能 completed++，保证无 completed 暂超 total 窗口。
+    lock.lock()
+    totalRequestedCount += 1
+    lock.unlock()
     let cacheName = MediaThumbnailer.cacheName(for: url, ignorePath: ignorePath)
     let cacheURL = MediaThumbnailer.cacheDirectoryURL().appendingPathComponent(cacheName + ".png")
     Logger.log("  cacheDir=\(MediaThumbnailer.cacheDirectoryURL().path) dirExists=\(FileManager.default.fileExists(atPath: MediaThumbnailer.cacheDirectoryURL().path))", level: .warning)
 
     // Cache hit: load existing PNG.
     if let img = NSImage(contentsOf: cacheURL) {
+      // 计数：cache-hit 即完成（C7）。total 已在入口 +1，此处 completed++ 维持不变量。
+      lock.lock()
+      completedCount += 1
+      lock.unlock()
       DispatchQueue.main.async { completion(img) }
       return
     }
@@ -157,6 +173,15 @@ final class MediaThumbnailer: NSObject {
     let dir = cacheDirectoryURL()
     try? FileManager.default.removeItem(at: dir)
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+  }
+
+  /// 返回当前缩略图计数快照 `(total, completed)`（`lock` 内读，C7 不变量断言用）。
+  /// 恒满足 `0 ≤ completed ≤ total`。**不 post 通知、不驱动 UI**——计数仅作不变量测试与
+  /// 未来扩展；cell cache-hit 路径绕过 generateThumbnail，故计数不反映"屏幕上显示了多少张缩略图"。
+  func thumbnailProgress() -> (total: Int, completed: Int) {
+    lock.lock()
+    defer { lock.unlock() }
+    return (totalRequestedCount, completedCount)
   }
 
   // MARK: Internals
@@ -206,15 +231,23 @@ final class MediaThumbnailer: NSObject {
     queue.asyncAfter(deadline: .now() + MediaThumbnailer.timeout) { [weak self, weak slot] in
       guard let self = self, let slot = slot else { return }
       var cb: ((NSImage?) -> Void)? = nil
+      var didTimeout = false
       self.lock.lock()
       let active = slot.job != nil && !slot.job!.timedOut
       if active, slot.job?.url.path == url.path {
         slot.job?.timedOut = true
         cb = slot.job?.completion
         slot.job = nil
+        didTimeout = true
       }
       self.lock.unlock()
       if let cb = cb {
+        // 计数：超时降级视为完成（completion 以 nil 回调，C7 不变量 completed ≤ total）。
+        if didTimeout {
+          self.lock.lock()
+          self.completedCount += 1
+          self.lock.unlock()
+        }
         DispatchQueue.main.async { cb(nil) }
         // slot 已释放，驱动 pending 队列（必须在 unlock 之后）——C3。
         self.dispatchNextPending()
@@ -249,6 +282,9 @@ extension MediaThumbnailer {
       return
     }
     slot.job = nil
+    // 计数：FFmpeg 回调到达（成功或失败）即视为完成（C7，completion 必然触发）。在 slot.job=nil
+    // 之后、unlock 之前完成 completed++（仍持锁），保持不变量原子可见。
+    completedCount += 1
     lock.unlock()
 
     let picked: NSImage? = {

@@ -1,0 +1,37 @@
+//
+//  iinaUITests.xcconfig
+//  iina
+//
+//  iinaUITests UI-test bundle build settings (XCUITest).
+//  Differs from iinaTests.xcconfig: UI test bundle uses XCUIApplication to launch the app
+//  independently — NO TEST_HOST/BUNDLE_LOADER. TEST_TARGET_NAME binds the .xctest to the
+//  iina app target so XCUIApplication() launches IINA.app (with full Copy Dylibs + libmpv).
+//
+
+#include? "Shared.xcconfig"
+
+// Explicit search paths (Shared.xcconfig does NOT carry these).
+HEADER_SEARCH_PATHS = $(inherited) $(SRCROOT)/deps/include
+LIBRARY_SEARCH_PATHS = $(inherited) $(SRCROOT)/deps/lib
+
+PRODUCT_NAME = iinaUITests
+PRODUCT_BUNDLE_IDENTIFIER = com.colliderli.$(PRODUCT_NAME:rfc1034identifier)
+GENERATE_INFOPLIST_FILE = YES
+
+ENABLE_TESTABILITY = YES
+CLANG_ENABLE_CODE_COVERAGE = YES
+
+// macOS XCUITest: test bundle 与 runner（派生自 iina.app）需同 Team 签名。
+// DEVELOPMENT_TEAM = N7VFH2C4KN（Personal Team），runner + test bundle Team 一致解决
+// "different Team IDs" 加载失败（macOS XCUITest 在无 Team 项目的固有坑）。
+CODE_SIGN_STYLE = Automatic
+DEVELOPMENT_TEAM = N7VFH2C4KN
+
+// XCUITest: launch the iina app target (NOT host-in-app like unit tests).
+TEST_TARGET_NAME = iina
+// runner（iinaUITests-Runner.app）需 disable-library-validation 绕过 library validation
+// （ad-hoc 签名下加载 test bundle 不被 "different Team IDs" 拒绝）。runner 不继承 iina.app
+// entitlements，需 test target 显式带。
+CODE_SIGN_ENTITLEMENTS = $(TARGET_NAME)/$(PRODUCT_NAME).entitlements
+
+LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks @loader_path/../Frameworks

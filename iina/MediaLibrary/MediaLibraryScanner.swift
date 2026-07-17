@@ -33,8 +33,35 @@ final class MediaLibraryScanner {
 
   private let fileManager: FileManager
 
+  /// 扫描进度回调（参数 = 累计已发现项数）。仅在 `scan(root:)` 所在的单线程（Store 的
+  /// `scanQueue`）上回调——Scanner 内部不改并发遍历，故节流时间戳无需加锁（C6）。节流
+  /// ≥100ms，且 `scan(root:)` return 前强制 flush 一次 finalCount（防丢最终态，ISSUE-1）。
+  /// Store 注入此闭包以桥接 `.iinaMediaScanProgress` 通知；Scanner 本身保持纯逻辑（不直接
+  /// 用 NotificationCenter），单测可喂固定目录断言回调计数。
+  var progressHandler: ((Int) -> Void)?
+
+  /// 节流时间戳（`progressHandler` 上次回调时刻）。仅在 scan 所在单线程读写，无需加锁。
+  private var lastProgressCallbackAt: Date = .distantPast
+  /// 节流间隔（秒）。≥100ms 回调一次，避免大库每文件回调导致 main post 风暴。
+  private static let throttleInterval: TimeInterval = 0.1
+
+  /// 本轮 scan 累计已发现项数（`scan(root:)` 入口 reset）。仅在 scan 所在单线程读写，无需
+  /// 加锁（C6）。每个 append 点 mutate 后调 `reportProgress(discovered:)` 节流回调。
+  private var discoveredCount: Int = 0
+
   init(fileManager: FileManager = .default) {
     self.fileManager = fileManager
+  }
+
+  /// 节流回调 progressHandler（C6）。仅在 scan 所在单线程调用。距上次回调 ≥ throttleInterval
+  /// 才真正回调；否则跳过（下次 append 或 return 前 flush 会补）。
+  private func reportProgress(discovered count: Int, force: Bool = false) {
+    guard let handler = progressHandler else { return }
+    let now = Date()
+    if force || now.timeIntervalSince(lastProgressCallbackAt) >= MediaLibraryScanner.throttleInterval {
+      lastProgressCallbackAt = now
+      handler(count)
+    }
   }
 
   /// Scan the root directory and return all discovered media items.
@@ -44,6 +71,10 @@ final class MediaLibraryScanner {
   /// - Throws: `MediaLibraryError.pathNotAccessible` if the root is not readable;
   ///   `MediaLibraryError.scanFailed` on I/O errors.
   func scan(root: URL) throws -> [MediaItem] {
+    // 进度计数 / 节流时间戳重置（每次 scan 独立；Scanner 实例虽通常一次性，但 reset 保险）。
+    discoveredCount = 0
+    lastProgressCallbackAt = .distantPast
+
     // Root must exist and be readable (directory).
     var isDir: ObjCBool = false
     guard fileManager.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else {
@@ -70,6 +101,8 @@ final class MediaLibraryScanner {
         throw MediaLibraryError.scanFailed(url: subdirURL, underlying: error)
       }
     }
+    // C6 / ISSUE-1：return 前强制 flush 最终计数，防丢最终态（节流可能跳过最后一批 append）。
+    reportProgress(discovered: items.count, force: true)
     return items
   }
 
@@ -103,9 +136,13 @@ final class MediaLibraryScanner {
               category: category,
               tvShowId: nil
             ))
+            discoveredCount += 1
+            reportProgress(discovered: discoveredCount)
           }
         } else if isVideoFile(entryURL) {
           items.append(makeItem(url: entryURL, category: category, tvShowId: nil))
+          discoveredCount += 1
+          reportProgress(discovered: discoveredCount)
         }
       }
     case .tvShow:
@@ -116,9 +153,13 @@ final class MediaLibraryScanner {
           let showId = FileNameCleaner.cleanShowName(subURL.lastPathComponent)
           let episodes = try scanEpisodes(in: subURL, tvShowId: showId)
           items.append(contentsOf: episodes)
+          // scanEpisodes 内部已逐集累计 discoveredCount + 节流回调；此处再补一次本 show 的累计汇报。
+          reportProgress(discovered: discoveredCount)
         } else if isVideoFile(subURL) {
           // A stray video file directly under 电视剧 (not in a show dir): treat as a standalone.
           items.append(makeItem(url: subURL, category: .tvShow, tvShowId: nil))
+          discoveredCount += 1
+          reportProgress(discovered: discoveredCount)
         }
       }
     }
@@ -133,6 +174,8 @@ final class MediaLibraryScanner {
     for fileURL in sorted {
       if isVideoFile(fileURL) {
         items.append(makeItem(url: fileURL, category: .tvShow, tvShowId: tvShowId))
+        discoveredCount += 1
+        reportProgress(discovered: discoveredCount)
       }
     }
     return items

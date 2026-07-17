@@ -41,6 +41,16 @@
                ReferencedContainer = "container:iina.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "442225645F0124BBCC0708ED"
+               BuildableName = "iinaUITests.xctest"
+               BlueprintName = "iinaUITests"
+               ReferencedContainer = "container:iina.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
