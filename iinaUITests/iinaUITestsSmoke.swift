@@ -12,15 +12,26 @@ import XCTest
 
 final class IinaUITestsSmoke: XCTestCase {
 
+  /// 测试写入产物隔离根（index.plist + 缩略图缓存均重定向到此），防止 XCUI 污染生产
+  /// `~/Library/(Application Support|Caches)/com.colliderli.iina`。见 `Utility.testDataRootURL`。
+  private static let testDataRoot = "/tmp/iina_gui_test_data"
+
   override func setUp() {
     super.setUp()
     continueAfterFailure = false
+    // 清掉上次的 index/缩略图缓存，避免跨次残留污染断言。
+    try? FileManager.default.removeItem(atPath: IinaUITestsSmoke.testDataRoot)
+    try? FileManager.default.createDirectory(
+      atPath: IinaUITestsSmoke.testDataRoot, withIntermediateDirectories: true)
   }
 
-  /// launch IINA + 注入测试媒体路径（-mediaLibraryRootPath seam，MediaLibraryStore 读取）
+  /// launch IINA + 注入测试媒体源（-mediaLibraryRootPath）+ 隔离写入产物（-iinaTestDataRoot）。
   private func launchApp() -> XCUIApplication {
     let app = XCUIApplication()
-    app.launchArguments = ["-mediaLibraryRootPath", "/tmp/iina_gui_test"]
+    app.launchArguments = [
+      "-mediaLibraryRootPath", "/tmp/iina_gui_test",
+      "-iinaTestDataRoot", IinaUITestsSmoke.testDataRoot,
+    ]
     app.launch()
     return app
   }

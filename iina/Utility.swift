@@ -443,6 +443,19 @@ class Utility {
     return appAsUrl
   }()
 
+  /// 测试隔离 seam：`-iinaTestDataRoot <dir>` 命令行参数把媒体库的持久化产物（index plist +
+  /// 缩略图缓存）重定向到指定临时目录，防止 XCUI 测试的 `saveIndex()` / 缩略图写入污染生产
+  /// `~/Library/Application Support` 与 `~/Library/Caches`。仅测试进程注入；生产正常启动无此
+  /// 参数 → nil。与 `MediaLibraryStore` 的 `-mediaLibraryRootPath` seam 配合：rootPath 注入测试
+  /// 媒体源，testDataRoot 隔离测试的写入产物。
+  static var testDataRootURL: URL? {
+    if let idx = CommandLine.arguments.firstIndex(of: "-iinaTestDataRoot"),
+       idx + 1 < CommandLine.arguments.count {
+      return URL(fileURLWithPath: CommandLine.arguments[idx + 1])
+    }
+    return nil
+  }
+
   static let userInputConfDirURL: URL = {
     let url = Utility.appSupportDirUrl.appendingPathComponent(AppData.userInputConfFolder, isDirectory: true)
     createDirIfNotExist(url: url)

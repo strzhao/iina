@@ -52,9 +52,14 @@ final class MediaLibraryStore: NSObject {
   /// Cached lookup: tvShowId → episodes (sorted by episodeNumber).
   private var tvShowIndex: [String: [MediaItem]] = [:]
 
-  /// Path to the persisted index plist.
+  /// Path to the persisted index plist. Under `-iinaTestDataRoot` (XCUI tests) this redirects to
+  /// the test data root so `saveIndex()` never writes the production plist (test-isolation seam;
+  /// see `Utility.testDataRootURL`).
   private let indexURL: URL = {
-    Utility.appSupportDirUrl.appendingPathComponent("media_library_index.plist", isDirectory: false)
+    if let root = Utility.testDataRootURL {
+      return root.appendingPathComponent("media_library_index.plist", isDirectory: false)
+    }
+    return Utility.appSupportDirUrl.appendingPathComponent("media_library_index.plist", isDirectory: false)
   }()
 
   /// Background queue for scanning.

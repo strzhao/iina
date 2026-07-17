@@ -264,6 +264,11 @@ final class MediaThumbnailer: NSObject {
   }
 
   static func cacheDirectoryURL() -> URL {
+    // Test-isolation seam: under `-iinaTestDataRoot` (XCUI tests) redirect thumbnail writes to the
+    // test data root so the production `~/Library/Caches/.../media_thumbnails` is never polluted.
+    if let root = Utility.testDataRootURL {
+      return root.appendingPathComponent(cacheSubdir, isDirectory: true)
+    }
     return Utility.thumbnailCacheURL.appendingPathComponent(cacheSubdir, isDirectory: true)
   }
 }
