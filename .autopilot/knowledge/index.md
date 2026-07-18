@@ -20,3 +20,4 @@
 - [2026-07-15] swift CGWindowListCopyWindowInfo 须传 kCGNullWindowID（nil 编译错被 2>/dev/null 吽致"窗口不存在"假阴性） | tags: iina, gui, verification, cgwindowlist, swift, debugging | → patterns.md
 - [2026-07-17] 给链预编译 dylib 的原生 xcodeproj app 加 hosted XCTest target 的 6 个坑（模块名大写/独立 xcconfig/不继承 bridging header/Debug 单档/不重链 dylib/TSan 不可用） | tags: testing, xctest, xcodeproj, hosted-test, module-name, bridging-header, testability, iina, tsan | → patterns.md
 - [2026-07-17] xcodeproj gem 注入 target 非语义重排 pbxproj；用 showBuildSettings 核验既有 target 零语义改动 | tags: xcodeproj, gem, pbxproj, non-semantic, diff, showbuildsettings, verification, c7 | → patterns.md
+- [2026-07-18] 测试 seam（static var Thread?）后台写致 TSan data race；后台捕获 Thread + 主线程写修复 | tags: tsan, test-seam, data-race, concurrency, thread, xctest | → patterns.md

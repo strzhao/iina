@@ -99,3 +99,9 @@
 **Scenario**: 用 xcodeproj Ruby gem 给 5074 行 pbxproj 注入新 target，gem save 后 git diff 显示既有 target 区域有 ~44 行"删除"，疑似违反"既有 target 零改动"契约。
 **Lesson**: **xcodeproj gem 的 project.save 会非语义重排 pbxproj**（group children 顺序、PBXFileReference 位置、XCRemoteSwiftPackageReference 显示名规范化如 GRMustache→GRMustache.swift），导致既有 target 区域出现"删除+新增"行，但**语义等价**（UUID / repositoryURL / build settings 全不变）。核验"既有 target 零语义改动"的正确方法：**`xcodebuild -showBuildSettings -target <app> -configuration Debug | grep 关键设置`** 对比改动前后逐项一致（PRODUCT_MODULE_NAME / SWIFT_OBJC_BRIDGING_HEADER / HEADER_SEARCH_PATHS / LIBRARY_SEARCH_PATHS 等）——showBuildSettings 反映最终合并后的有效设置，比 raw pbxproj diff 更能证明语义不变；辅以"app 能构建 + hosted 测试通过"作强证据。**优先用 gem 程序化注入而非手编大 pbxproj**（手编 UUID/交叉引用极易破坏工程）。注意：gem 改 GRMustache 显示名为 "GRMustache.swift" 是规范化（与 repositoryURL 末尾一致），非用户可感知语义变化。
 **Evidence**: commit b1739864 git diff 既有区域 ~44 删除行（gem 重排）+ showBuildSettings 与改动前基线逐项一致 + app 构建/23 测试通过证明既有 4 target 完好。
+
+### [2026-07-18] 测试 seam（记录线程的 static var）后台写致 TSan data race；主线程写修复
+<!-- tags: tsan, test-seam, data-race, concurrency, thread, xctest -->
+**Scenario**: 为验收"某操作在后台线程执行"加测试 seam（`internal static var lastThread: Thread?`），在后台异步块内 `lastThread = Thread.current` 记录，测试主线程读 `lastThread.isMainThread` 断言
+**Lesson**: 后台异步块写 static var + 主线程读 = TSan data race（即使一写一读无逻辑冲突，TSan 仍报，且会拦下所在 test bundle 的测试——表现为"0 failures 但 TEST FAILED"）。修复模式：后台块捕获局部 `let thread = Thread.current`（Thread 对象不可变，跨线程持有安全），在 `DispatchQueue.main.async` 回块写字段——写入收敛主线程消除竞争，记录的仍是后台线程身份。适用于任何"后台记录、主线程断言"的 seam
+**Evidence**: IINA 视频墙 P3/P5 seam `__test_lastIndexLoadThread`/`__test_lastCacheHitThread` 在后台块写致 TSan `data race ... closure #2 in configure`，P3.1 测试被拦（iinaTests 86 tests 0 failures 但整体 TEST FAILED）；改后台捕获 `deserializeThread`/`readThread` + 主线程写字段后 race 消除、86 tests 全绿（核对锚点：2026-07-18 MediaLibraryStore.swift loadIndexAsync / ContinueWatchingCollectionViewItem.swift configure，commit b9dbb91e）
