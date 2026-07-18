@@ -64,6 +64,7 @@ xcodebuild -project iina.xcodeproj -scheme iina -configuration Debug -destinatio
 - 独立构建配置 `Configs/iinaTests.xcconfig`（显式声明 HEADER/LIBRARY_SEARCH_PATHS，Shared.xcconfig 不含这些；不设 bridging header；仅 Debug 单档）
 - **仍有 11 个 `tests/*.acceptance.test.swift` 未接入**（依赖 NAS/ffmpeg IO 或完整 app 启动环境）。未来接入时须把 `@testable import iina` 改为 `@testable import IINA`（模块名大写），并补齐夹具可见性
 - 访问 VC/Item 成员需 internal 可见性（关键成员已改 internal），夹具 `MediaLibraryStore.setItemsForTesting` 已补
+- **视频墙 P1-P5 性能优化**（`b9dbb91e`）：写盘移出主线程+合并（scheduleSaveIndex）/ 搜索 0.15s 防抖（searchDebounceWorkItem）/ 启动后台 loadIndexAsync / `MediaItem.cleanedNameLowercased` 预计算 / 缩略图 cache-hit 移入 queue.async。新增测试 seam：`MediaLibraryStore.disableRescanForTesting`（禁扫真 NAS）、`reloadIndexForTesting`、`__test_lastIndexLoadThread`/`__test_lastCacheHitThread`（写回主线程避 TSan race）、`MediaLibraryViewController.reloadDataCallCount`；配套 `MediaLibraryPerfP1_P5.unit.test` + 6 红队 acceptance（尚未接入 xcodebuild test，依赖 hosted app 环境）
 
 **纯逻辑验证**（脱离 XCTest 时）仍可用 `swiftc -typecheck` + `main.swift`（允许顶层代码）独立编译，绕过 app 链接。GUI 行为用 marker 文件（`try? "x".write(toFile:)` 同步写）诊断执行链路。
 
