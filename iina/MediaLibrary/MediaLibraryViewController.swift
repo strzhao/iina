@@ -56,6 +56,14 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
   /// @testable 契约 seam（红队 ACC-throttle 验证窗口合并 ≤1 次）。每次 reconfigureVisibleItems 自增。
   internal private(set) var reconfigureCallCount: Int = 0
 
+  /// P2 搜索防抖：连续输入时取消上次未触发的 refresh，合并为停止输入后一次。0.15s。
+  private var searchDebounceWorkItem: DispatchWorkItem?
+  /// P2 防抖窗口（s）。契约 == 0.15。
+  private let searchDebounceInterval: TimeInterval = 0.15
+  /// P2 seam：每次 refresh 内 collectionView.reloadData() 自增。红队测 P2.1/P2.2 防抖窗口内
+  /// reloadData 增量（连续输入 ≤2，停止 ≥300ms 后 ==1）。
+  internal private(set) var reloadDataCallCount: Int = 0
+
   /// Height constraint for `continueWatchingView`, toggled in `refresh()` so the strip doesn't
   /// reserve 130pt when empty (Auto Layout keeps a hidden view's frame, so `isHidden` alone
   /// would leave a blank gap at the top).
@@ -228,6 +236,9 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
 
     NotificationCenter.default.addObserver(self, selector: #selector(storeScanned(_:)),
                                            name: MediaLibraryStore.scannedNotification, object: nil)
+    // P3：后台加载完成 → refresh 显示加载完的缓存。
+    NotificationCenter.default.addObserver(self, selector: #selector(indexLoaded),
+                                           name: MediaLibraryStore.indexLoadedNotification, object: nil)
     NotificationCenter.default.addObserver(self, selector: #selector(historyUpdated),
                                            name: .iinaHistoryUpdated, object: nil)
     NotificationCenter.default.addObserver(self, selector: #selector(metadataProbed(_:)),
@@ -257,8 +268,13 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
   }
 
   @objc private func searchChanged(_ sender: NSSearchField) {
+    // P2：currentFilter 立即更新（终态语义正确），仅 refresh() 被 debounce。
+    // 契约：空字符串与非空走同一 debounce 路径，无 fast-path 短路（I4）。
     currentFilter = sender.stringValue
-    refresh()
+    searchDebounceWorkItem?.cancel()
+    let work = DispatchWorkItem { [weak self] in self?.refresh() }
+    searchDebounceWorkItem = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + searchDebounceInterval, execute: work)
   }
 
   @objc private func storeScanned(_ note: Notification) {
@@ -275,6 +291,11 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
       }
       self?.refresh()
     }
+  }
+
+  /// P3：后台 loadIndexAsync 完成 → refresh 显示加载完的缓存。通知已在主线程 post。
+  @objc private func indexLoaded() {
+    refresh()
   }
 
   // MARK: - scan-progress-handler
@@ -363,12 +384,15 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
     }
 
     collectionView.reloadData()
+    // P2 seam：reloadData 调用计数（红队 P2.1/P2.2 防抖窗口断言）。
+    reloadDataCallCount += 1
     continueWatchingView.update(with: cwItems)
     if displayedItems.isEmpty {
       // P1-5：isScanning 时显示进度 spinner + label（替代静态"扫描中…"）。spinner/label 已在
       // loadView 构造、由 scanProgressUpdated 驱动文本；此处仅在 refresh 路径上保证它们可见，
       // 让首帧（progressHandler 尚未回调）也不空白（label 初始值 "扫描中…"，scan-progress
       // .first-frame-non-empty-text）。
+      // P3：isLoadingIndex（后台反序列化进行中）显示「加载媒体库…」占位，先于反序列化完成可交互。
       if store.isScanning {
         emptyStateLabel.isHidden = true
         scanProgressSpinner.startAnimation(nil)
@@ -376,6 +400,13 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
         if scanProgressLabel.stringValue.isEmpty {
           scanProgressLabel.stringValue = "扫描中…"
         }
+        scanProgressLabel.isHidden = false
+      } else if store.isLoadingIndex {
+        // P3 首屏占位：spinner 复用 scanProgressSpinner，label 改「加载媒体库…」。
+        emptyStateLabel.isHidden = true
+        scanProgressSpinner.startAnimation(nil)
+        scanProgressSpinner.isHidden = false
+        scanProgressLabel.stringValue = "加载媒体库…"
         scanProgressLabel.isHidden = false
       } else {
         scanProgressSpinner.isHidden = true

@@ -145,25 +145,29 @@ final class MediaThumbnailer: NSObject {
     lock.lock()
     totalRequestedCount += 1
     lock.unlock()
-    let cacheName = MediaThumbnailer.cacheName(for: url, ignorePath: ignorePath)
-    let cacheURL = MediaThumbnailer.cacheDirectoryURL().appendingPathComponent(cacheName + ".png")
-    Logger.log("  cacheDir=\(MediaThumbnailer.cacheDirectoryURL().path) dirExists=\(FileManager.default.fileExists(atPath: MediaThumbnailer.cacheDirectoryURL().path))", level: .warning)
 
-    // Cache hit: load existing PNG.
-    if let img = NSImage(contentsOf: cacheURL) {
-      // 计数：cache-hit 即完成（C7）。total 已在入口 +1，此处 completed++ 维持不变量。
-      lock.lock()
-      completedCount += 1
-      lock.unlock()
-      DispatchQueue.main.async { completion(img) }
-      return
-    }
-
+    // P5 兜底路径：cache-hit 分支整体移入 queue.async（原 :153-160 在调用线程同步读 PNG）。
+    // 经 cell.requestThumbnail→configure 链路时调用线程为主线程，同步读 PNG 卡滚动。
+    // completion 仍显式回主线程（契约不变，P5.5）。
     queue.async { [weak self] in
       guard let self = self else {
         DispatchQueue.main.async { completion(nil) }
         return
       }
+      let cacheName = MediaThumbnailer.cacheName(for: url, ignorePath: ignorePath)
+      let cacheURL = MediaThumbnailer.cacheDirectoryURL().appendingPathComponent(cacheName + ".png")
+      Logger.log("  cacheDir=\(MediaThumbnailer.cacheDirectoryURL().path) dirExists=\(FileManager.default.fileExists(atPath: MediaThumbnailer.cacheDirectoryURL().path))", level: .warning)
+
+      // Cache hit: load existing PNG（现已在 queue 线程）。
+      if let img = NSImage(contentsOf: cacheURL) {
+        // 计数：cache-hit 即完成（C7）。total 已在入口 +1，此处 completed++ 维持不变量。
+        self.lock.lock()
+        self.completedCount += 1
+        self.lock.unlock()
+        DispatchQueue.main.async { completion(img) }
+        return
+      }
+      // 未命中仍走 dispatch（FFmpeg 抽帧，P5.6 回归保护）。
       self.dispatch(url: url, ignorePath: ignorePath, cacheName: cacheName, cacheURL: cacheURL, completion: completion)
     }
   }

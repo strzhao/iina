@@ -41,6 +41,11 @@ final class MediaItem: NSObject, NSSecureCoding {
   let url: URL
   /// Display name after cleaning (download-site prefix removed, etc.).
   let cleanedName: String
+  /// Pre-computed lowercased form of `cleanedName` (P4). `let`（不可变、线程安全）——每次 init 时
+  /// 由 `cleanedName.lowercased()` 计算，不参与 NSSecureCoding（无新 Key，旧 plist 向后兼容：
+  /// `init?(coder:)` 解码 `cleanedName` 后计算）。Store 查询用此字段，避免每次 filter 重复全表
+  /// `lowercased()`。
+  let cleanedNameLowercased: String
   /// Original file/directory name before cleaning.
   let rawName: String
   /// Category derived from the fixed scan subdirectory.
@@ -81,6 +86,8 @@ final class MediaItem: NSObject, NSSecureCoding {
        bitrate: Int? = nil) {
     self.url = url
     self.cleanedName = cleanedName
+    // P4：init 时预计算小写形式（let，线程安全，无 NSSecureCoding Key）。
+    self.cleanedNameLowercased = cleanedName.lowercased()
     self.rawName = rawName
     self.category = category
     self.tvShowId = tvShowId
@@ -108,6 +115,9 @@ final class MediaItem: NSObject, NSSecureCoding {
 
     self.url = url as URL
     self.cleanedName = cleanedName as String
+    // P4 / I3 向后兼容：旧 plist 无 cleanedNameLowercased Key，解码 cleanedName 后计算。
+    // 不可变 let，与 init(url:) 同样在 init 末尾前赋值。
+    self.cleanedNameLowercased = (cleanedName as String).lowercased()
     self.rawName = rawName as String
     self.category = category
     self.tvShowId = coder.decodeObject(of: NSString.self, forKey: Key.tvShowId) as String?

@@ -42,6 +42,9 @@ class ContinueWatchingCollectionViewItem: NSCollectionViewItem {
   private(set) var mediaItem: MediaItem?
   /// Thumbnail request token (stale-callback guard, same pattern as main card).
   private var thumbnailToken: UInt64 = 0
+  /// P5 seam：cache-hit PNG 读取线程记录（红队 P5.1 测主路径异步化）。
+  /// `configure` cache-hit 分支在 `DispatchQueue.global` 内赋值。
+  internal static var __test_lastCacheHitThread: Thread?
 
   // MARK: Lifecycle
 
@@ -139,6 +142,16 @@ class ContinueWatchingCollectionViewItem: NSCollectionViewItem {
   /// Cached progress ratio so viewDidLayout can re-draw the fill on resize.
   private var currentProgressRatio: Double = 0
 
+  override func prepareForReuse() {
+    super.prepareForReuse()
+    // P5：异步化后补 prepareForReuse（与 MediaItemCollectionViewItem:270-281 一致），降低维护心智。
+    // stale guard（thumbnailToken）已使异步化本身闭环，此处为锦上添花：清 image + token 自增
+    // （作废旧回调）+ mediaItem 置 nil（防复用串味）。
+    thumbnailView.image = nil
+    thumbnailToken &+= 1
+    mediaItem = nil
+  }
+
   // MARK: Configuration
 
   /// Configure the card with a media item and trigger on-demand thumbnail generation.
@@ -165,9 +178,27 @@ class ContinueWatchingCollectionViewItem: NSCollectionViewItem {
     // Force a layout pass to render the progress fill with the new ratio.
     view.needsLayout = true
 
-    // Thumbnail: cached path first, else generate.
-    if let thumbPath = item.thumbnailPath, let img = NSImage(contentsOf: thumbPath) {
-      thumbnailView.image = img
+    // Thumbnail: cached path first (decode off main thread, P5), else generate.
+    // 仿 MediaItemCollectionViewItem:429-440 异步化：cache-hit PNG 读取移入
+    // DispatchQueue.global，避免主线程同步读 PNG 卡滚动。stale guard（thumbnailToken）防复用串味。
+    if let thumbPath = item.thumbnailPath {
+      let token = thumbnailToken
+      DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        let img = NSImage(contentsOf: thumbPath)
+        // P5 seam：捕获 cache-hit 读取线程（后台）；写 seam 移到主线程避免与测试主线程读 race（TSan）。
+        let readThread = Thread.current
+        DispatchQueue.main.async {
+          guard let self = self, self.thumbnailToken == token else { return }
+          ContinueWatchingCollectionViewItem.__test_lastCacheHitThread = readThread
+          if let img = img {
+            // 命中：设 image（保持原 :169-170 语义）。
+            self.thumbnailView.image = img
+          } else {
+            // 读失败回退生成（保持原 :169-173 「读失败回退 requestThumbnail」语义）。
+            self.requestThumbnail(ignorePath: ignorePath)
+          }
+        }
+      }
     } else {
       requestThumbnail(ignorePath: ignorePath)
     }

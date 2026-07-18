@@ -29,6 +29,9 @@ final class MediaLibraryStore: NSObject {
   /// Notification posted when a scan completes and the store's items have been refreshed.
   static let scannedNotification = Notification.Name("iinaMediaLibraryScanned")
 
+  /// P3：后台 `loadIndexAsync` 完成后 post（object = store）。VC 监听 → refresh 显示加载完的缓存。
+  static let indexLoadedNotification = Notification.Name("iinaMediaLibraryIndexLoaded")
+
   /// 扫描进度通知（P1-5）。`userInfo["discovered"] = Int`（累计已发现项数）。由 `rescan()`
   /// 注入 Scanner 的 progressHandler 桥接而来，回调一律经 `DispatchQueue.main.async` post
   /// （C6）。VC 监听此通知更新进度 label + spinner，**不触发 reloadData/reconfigureVisibleItems**
@@ -65,6 +68,20 @@ final class MediaLibraryStore: NSObject {
   /// Background queue for scanning.
   private let scanQueue = DispatchQueue(label: "iina.media.library.scan", qos: .userInitiated)
 
+  /// P1 后台写盘队列。编码留主线程（items 只在主线程改，后台编码会数据竞争），仅 `data.write`
+  /// 入此队列（qos .utility 不抢占用户交互）。
+  private let saveQueue = DispatchQueue(label: "iina.media.library.save", qos: .utility)
+  /// P1 合并写窗口（s）。与 metadataProbed coalesce 一致。
+  private let saveCoalesceInterval: TimeInterval = 0.1
+  /// P1 脏标记（仅主线程访问）。
+  private var saveIndexDirty: Bool = false
+  /// P1 合并调度标志（仅主线程访问）。
+  private var saveFlushScheduled: Bool = false
+  /// P1 seam：saveQueue 写盘次数（`lock` 守护）。红队测 P1.3 合并（N≥8 变更 → ≤4 && <N）。
+  internal private(set) var saveWriteCount: Int = 0
+  /// P1 守护 saveWriteCount 的锁。
+  private let saveWriteLock = NSLock()
+
   /// 并发限宽（4）的 OperationQueue，用于惰性元数据探测。原来用 serial DispatchQueue 时，单个
   /// NAS 慢文件的 `avformat_open_input` 会卡死整条队列、所有卡片元数据长期空白；改并发后单慢文件
   /// 不再阻塞其他 item 的探测完成（P0-3）。`probingKeys`/`probedKeys` 已防重探 stampede，
@@ -89,9 +106,36 @@ final class MediaLibraryStore: NSObject {
   /// True while a rescan is in progress (UI shows "扫描中…" instead of the empty state).
   private(set) var isScanning: Bool = false
 
+  /// P3：后台 loadIndexAsync 进行中。仅主线程读写。VC refresh 据此显示「加载中…」占位。
+  internal private(set) var isLoadingIndex: Bool = false
+  /// P3 / B1：rescan 统一闸门。`isLoadingIndex` 期间的 rescan 调用排队（合并为一次），由
+  /// `loadIndexAsync` 完成块末尾放行。覆盖所有 rescan 调用点（viewDidLoad 首启 +
+  /// PrefMediaLibraryViewController:121 改路径），不依赖调用点改造。仅主线程读写。
+  private var pendingRescan: Bool = false
+  /// P3 seam：记录反序列化完成线程（红队 P3.1 断言 isMainThread == false）。
+  internal var __test_lastIndexLoadThread: Thread?
+
+  /// 测试隔离 seam（auto-fix）：禁 rescan 避免 hosted XCTest 构造 VC（viewDidLoad）时扫真 NAS
+  /// （默认 rootPath 指向绿联 NAS 挂载点，rescan 异步完成会覆盖 setItemsForTesting）。
+  /// 生产恒 false；红队测试构造 VC 前设 true。仅跳过扫描，不影响 loadIndex/通知/P3.5（通知模拟）。
+  internal static var disableRescanForTesting: Bool = false
+
   private override init() {
     super.init()
-    loadIndex()
+    // P3：不再同步 loadIndex()（主线程阻塞首屏）。设 isLoadingIndex 后台加载，首屏占位先于
+    // 反序列化完成可交互。
+    isLoadingIndex = true
+    loadIndexAsync()
+    // P1.5：退出前同步 flush 兜底，防 0.1s 合并窗口内的变更丢失（强杀/崩溃丢最近窗口可接受：
+    // index.plist 仅缓存，下次 rescan 重建）。
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(handleWillTerminate),
+      name: NSApplication.willTerminateNotification, object: nil)
+  }
+
+  /// P1.5：退出前 flushNow 兜底。
+  @objc private func handleWillTerminate() {
+    flushNow()
   }
 
   // MARK: Root path
@@ -123,6 +167,16 @@ final class MediaLibraryStore: NSObject {
   /// cached items (from `loadIndex`) are preserved so a transient NAS I/O hiccup doesn't wipe the
   /// whole library view.
   func rescan() {
+    // 测试隔离（auto-fix）：禁 rescan 避免扫真 NAS（红队 disableRescanForTesting=true 时）。
+    if Self.disableRescanForTesting { return }
+    // P3 / B1：统一闸门。isLoadingIndex 期间所有 rescan 调用点（viewDidLoad 首启 +
+    // PrefMediaLibraryViewController:121 改路径）排队，由 loadIndexAsync 完成块放行。
+    // 保证 rescan 失败时保留的是真实缓存（[2026-07-13] 后台扫描失败保留缓存），非空集。
+    // 多次排队合并为 loadIndex 完成后一次最新路径扫描（pendingRescan 为 bool）。
+    if isLoadingIndex {
+      pendingRescan = true
+      return
+    }
     Logger.log("MediaLibraryStore.rescan start root=\(rootPath)", level: .warning)
     isScanning = true
     scanQueue.async { [weak self] in
@@ -145,7 +199,8 @@ final class MediaLibraryStore: NSObject {
         DispatchQueue.main.async {
           self.isScanning = false
           self.setItems(result)
-          self.saveIndex()
+          // P1：合并写（0.1s 窗口），替换原 saveIndex()。
+          self.scheduleSaveIndex()
           NotificationCenter.default.post(name: MediaLibraryStore.scannedNotification, object: self)
         }
       } catch {
@@ -207,7 +262,8 @@ final class MediaLibraryStore: NSObject {
     }
     if let filter = filter, !filter.isEmpty {
       let needle = filter.lowercased()
-      result = result.filter { $0.cleanedName.lowercased().contains(needle) }
+      // P4：用预计算的 cleanedNameLowercased，避免每次 filter 重复全表 lowercased()。
+      result = result.filter { $0.cleanedNameLowercased.contains(needle) }
     }
     return result
   }
@@ -288,7 +344,8 @@ final class MediaLibraryStore: NSObject {
     }
     if let filter = filter, !filter.isEmpty {
       let needle = filter.lowercased()
-      groups = groups.filter { $0.representative.cleanedName.lowercased().contains(needle) }
+      // P4：用预计算的 cleanedNameLowercased。
+      groups = groups.filter { $0.representative.cleanedNameLowercased.contains(needle) }
     }
     groups.sort { $0.representative.cleanedName < $1.representative.cleanedName }
     return groups
@@ -306,6 +363,7 @@ final class MediaLibraryStore: NSObject {
   // MARK: Persistence
 
   /// Load the cached index from disk (best-effort; corrupt/missing → empty).
+  /// 保留同步版本供测试夹具或未来场景显式调用；生产 init 用 `loadIndexAsync`。
   func loadIndex() {
     guard FileManager.default.fileExists(atPath: indexURL.path) else { return }
     do {
@@ -323,14 +381,100 @@ final class MediaLibraryStore: NSObject {
     }
   }
 
-  /// Persist the current items to the index plist (main-thread call).
-  func saveIndex() {
-    do {
-      let data = try NSKeyedArchiver.archivedData(withRootObject: items, requiringSecureCoding: true)
-      try data.write(to: indexURL, options: [.atomic])
-    } catch {
-      // Non-fatal: index is only a cache.
+  /// P3：后台反序列化 → 主线程 setItems + post + 放行 pendingRescan。复用 rescan 的
+  /// 「后台产出 → 主线程 setItems」模式。反序列化失败（corrupt/missing）→ items = [] +
+  /// rebuildIndices（与 loadIndex catch 一致）。
+  private func loadIndexAsync() {
+    let url = indexURL
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      // 后台产出，不碰现有 items。
+      var arr: [MediaItem] = []
+      if FileManager.default.fileExists(atPath: url.path) {
+        do {
+          let data = try Data(contentsOf: url)
+          let object = try NSKeyedUnarchiver.unarchivedObject(
+            ofClasses: [NSArray.self, MediaItem.self], from: data)
+          if let decoded = object as? [MediaItem] {
+            arr = decoded
+          }
+        } catch {
+          // Corrupt index — start fresh（与 loadIndex catch 一致）。
+          arr = []
+        }
+      }
+      // P3 seam：捕获后台反序列化线程（此处为后台线程）；写 seam 移到主线程避免与测试主线程读 race（TSan）。
+      let deserializeThread = Thread.current
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        self.__test_lastIndexLoadThread = deserializeThread
+        self.items = arr
+        self.rebuildIndices()
+        self.isLoadingIndex = false
+        NotificationCenter.default.post(
+          name: MediaLibraryStore.indexLoadedNotification, object: self)
+        // P3 / B1：放行 pendingRescan。闸门期间排队的 rescan 在此执行（最新路径）。
+        if self.pendingRescan {
+          self.pendingRescan = false
+          self.rescan()
+        }
+      }
     }
+  }
+
+  /// 测试 seam（auto-fix P3.3）：重新触发 loadIndexAsync，供红队干净测「加载 item 数 == plist」，
+  /// 避免其他测试 setItemsForTesting 的单例污染（单例只在 init 时 loadIndexAsync 一次，之后 store.items
+  /// 被污染无法干净测）。仅测试用：重置 isLoadingIndex=true + loadIndexAsync（从 indexURL 重新反序列化）。
+  internal func reloadIndexForTesting() {
+    isLoadingIndex = true
+    loadIndexAsync()
+  }
+
+  /// P1：主线程标记 dirty + 0.1s 合并调度。替换所有 `saveIndex()` 调用点。窗口内多次
+  /// schedule 合并为 1 次编码 + 1 次写盘（红队 P1.3）。
+  internal func scheduleSaveIndex() {
+    saveIndexDirty = true
+    guard !saveFlushScheduled else { return }
+    saveFlushScheduled = true
+    DispatchQueue.main.asyncAfter(deadline: .now() + saveCoalesceInterval) { [weak self] in
+      self?.flushSaveIndex()
+    }
+  }
+
+  /// P1：主线程 flush（由 asyncAfter 调度）。编码留主线程（items 只在主线程改），仅 `data.write`
+  /// 入 saveQueue。
+  private func flushSaveIndex() {
+    saveFlushScheduled = false
+    guard saveIndexDirty else { return }
+    saveIndexDirty = false
+    // 主线程编码（无数据竞争）。
+    let data = try? NSKeyedArchiver.archivedData(withRootObject: items, requiringSecureCoding: true)
+    let url = indexURL
+    saveQueue.async { [weak self] in
+      try? data?.write(to: url, options: [.atomic])
+      self?.recordSaveWrite()
+    }
+  }
+
+  /// P1：同步编码 + 同步写（主线程），退出/测试用。重置 dirty/调度标志。
+  internal func flushNow() {
+    saveIndexDirty = false
+    saveFlushScheduled = false
+    let data = try? NSKeyedArchiver.archivedData(withRootObject: items, requiringSecureCoding: true)
+    try? data?.write(to: indexURL, options: [.atomic])
+    recordSaveWrite()
+  }
+
+  /// P1：saveWriteCount 自增（saveWriteLock 守护，saveQueue 与主线程 flushNow 均调）。
+  private func recordSaveWrite() {
+    saveWriteLock.lock()
+    saveWriteCount += 1
+    saveWriteLock.unlock()
+  }
+
+  /// Persist the current items to the index plist (main-thread call).
+  /// P1：保留为 `flushNow` 别名（向后兼容外部调用点，如未迁移的测试夹具）。
+  func saveIndex() {
+    flushNow()
   }
 
   // MARK: Lazy metadata probing (P3)
@@ -407,7 +551,8 @@ final class MediaLibraryStore: NSObject {
     }
 
     guard changed else { return }
-    saveIndex()
+    // P1：合并写（0.1s 窗口），替换原 saveIndex()。probe 并发 4 路批量回填 → 大量合并机会。
+    scheduleSaveIndex()
     NotificationCenter.default.post(name: MediaLibraryStore.metadataProbedNotification, object: item)
   }
 
