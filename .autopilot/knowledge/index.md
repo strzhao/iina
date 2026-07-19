@@ -25,3 +25,6 @@
 - [2026-07-19] iina-cli build 产物在项目内 build/Debug/ 不在 DerivedData app bundle；增量需删产物强制 | tags: xcodebuild, iina-cli, build-products, deriveddata, incremental, copy-phase, iina | → patterns.md
 - [2026-07-19] pbxproj 悬空文件引用致 develop build 失败（commit 引用漏 commit .swift）| tags: xcodeproj, pbxproj, dangling-reference, build, git, commit-consistency, iina | → patterns.md
 - [2026-07-19] det-machine 验收测试不应锁死"会增长的数字"（测试总数）；断言核心不变量 | tags: testing, det-machine, acceptance-test, red-team, baseline, xctest, iina | → patterns.md
+- [2026-07-20] 依赖异步写盘（watch-later）的 UI 刷新须在写盘后触发；高频路径禁全量 reloadData | tags: medialibrary, continue-watching, watch-later, refresh-timing, reloaddata, performance, flicker, mpv, nscollectionview, iina | → patterns.md
+- [2026-07-20] iinaTests（unit test）污染生产 index.plist；XCUI 有 testDataRoot 但 unit test 无 | tags: testing, iinatests, unit-test, test-isolation, nskeyedarchiver, pollution, testdataroot, iina | → patterns.md
+- [2026-07-20] python plistlib 解 NSKeyedArchiver 诊断 IINA 运行时数据（history/index/watch_later） | tags: debugging, nskeyedarchiver, plistlib, python, runtime-data, iina, history, medialibrary | → patterns.md
