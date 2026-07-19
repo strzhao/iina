@@ -205,6 +205,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     // Must setup preferences before logging so log level is set correctly.
     registerUserDefaultValues()
 
+    // Configure the structured JSONL log channel (iina.jsonl) before any Logger.log call.
+    // Independent of the Preference-gated iina.log; release defaults to warning level.
+    Logger.configureJSONL()
+
     observedPrefKeys.forEach { key in
       UserDefaults.standard.addObserver(self, forKeyPath: key.rawValue, options: .new, context: nil)
     }
@@ -743,6 +747,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
   func applicationWillTerminate(_ notification: Notification) {
     Logger.log("App will terminate")
     Logger.closeLogFile()
+    Logger.closeJSONL()
   }
 
   /**

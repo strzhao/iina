@@ -171,6 +171,19 @@ class Logger: NSObject {
     }
   }()
 
+  // MARK: - JSONL structured logging (parallel channel to iina.log)
+  //
+  // iina.jsonl is an independent structured log channel:
+  // - release defaults to warning level (iina.log is still gated by Preference.enableLogging)
+  // - runs on its own serial queue `jsonlQueue`, fully decoupled from iina.log's `lock`
+  // - flushes every line via handle.synchronize() (fixes the print-to-stdout buffer issue)
+  // - rotates at 5 MiB / retains 30 archives / 50 MiB total cap
+  // See IINALogConfig (SOURCE OF TRUTH) and IINALogWriter.
+  private static var jsonlWriter: IINALogWriter?
+  private static var jsonlMinLevel: Logger.Level?
+  private static let jsonlQueue = DispatchQueue(label: "iina.logger.jsonl.serial")
+  private static var jsonlConfigured = false
+
   private static let dateFormatter: DateFormatter = {
     let formatter = DateFormatter()
     formatter.dateFormat = "HH:mm:ss.SSS"
@@ -253,6 +266,16 @@ class Logger: NSObject {
     log(message, level: level, subsystem: subsystem)
   }
 
+  /// Log a message with structured metadata.
+  ///
+  /// The `meta` dictionary is written only to the `iina.jsonl` `meta` field (queryable via
+  /// `iina log show --json`); the human-readable `iina.log` format is unaffected.
+  /// - Important: The caller is responsible for redacting any sensitive values in `meta`.
+  static func log(_ message: @autoclosure () -> String, level: Level = .debug,
+                  subsystem: Subsystem = .general, meta: [String: Any]?) {
+    log(message, level: level, subsystem: subsystem, meta: meta)
+  }
+
   /// Log a message.
   ///
   /// Emit a message to the log file if logging is enabled and logging is configured to log messages at the given level.
@@ -266,7 +289,7 @@ class Logger: NSObject {
   ///   - message: A closure that when executed gives the message to log.
   ///   - level: The log level of the message.
   ///   - subsystem: The subsystem emitting this message.
-  static func log(_ message: () -> String, level: Level = .debug, subsystem: Subsystem = .general) {
+  static func log(_ message: () -> String, level: Level = .debug, subsystem: Subsystem = .general, meta: [String: Any]? = nil) {
     #if !DEBUG
     guard enabled else { return }
     #endif
@@ -289,6 +312,20 @@ class Logger: NSObject {
     }
 
     print(string, terminator: "")
+
+    // JSONL delegation (independent of iina.log's `enabled` gate; `message` is already a String
+    // here so zero extra cost; jsonlQueue.async does not block the caller; fully decoupled from
+    // the lock.withLock iina.log write below). Only emitted when at/above jsonlMinLevel.
+    if let min = jsonlMinLevel, level >= min {
+      let msgCopy = message
+      let subsystemRaw = subsystem.rawValue
+      let metaCopy = meta
+      jsonlQueue.async {
+        jsonlWriter?.append(
+          level: level, subsystem: subsystemRaw,
+          msg: msgCopy, meta: metaCopy, file: nil, line: nil)
+      }
+    }
 
     #if DEBUG
     guard enabled else { return }
@@ -344,5 +381,68 @@ class Logger: NSObject {
     Utility.showAlert("fatal_error", arguments: [message])
     cleanup()
     exit(1)
+  }
+
+  // MARK: - JSONL lifecycle (called from AppDelegate)
+
+  /// Configure the JSONL logging channel. Idempotent.
+  ///
+  /// Resolves the min level via `IINALogConfig.resolveMinLevel()`, creates the log directory,
+  /// opens the current file for appending, and prunes excess archives. Should be called from
+  /// `AppDelegate.applicationWillFinishLaunching` before any `Logger.log` call. Silent no-op when
+  /// the resolved level is nil (e.g. under the XCTest host).
+  static func configureJSONL() {
+    jsonlQueue.sync {
+      guard !jsonlConfigured else { return }
+      jsonlMinLevel = IINALogConfig.resolveMinLevel()
+      if jsonlMinLevel != nil {
+        jsonlWriter = IINALogWriter()
+        jsonlWriter?.ensureCurrentFile()
+        jsonlWriter?.pruneArchives()
+      }
+      jsonlConfigured = true
+    }
+  }
+
+  /// Close the JSONL file handle. Called from `AppDelegate.applicationWillTerminate`.
+  static func closeJSONL() {
+    jsonlQueue.sync {
+      jsonlWriter?.close()
+    }
+  }
+
+  // MARK: - Testing seams (internal; all synchronized via jsonlQueue to stay TSan-safe —
+  //         no background writes to static vars, see patterns.md [2026-07-18])
+
+  /// Test-only: inject a specific logs directory and level (bypasses env / isRunningTests).
+  static func configureForTesting(logsDir: String, level: Logger.Level?) {
+    jsonlQueue.sync {
+      jsonlWriter?.close()
+      let path = "\(logsDir)/\(IINALogConfig.currentLogFileName)"
+      jsonlWriter = IINALogWriter(logsDir: logsDir, currentPath: path)
+      jsonlMinLevel = level
+      if level != nil { jsonlWriter?.ensureCurrentFile() }
+      jsonlConfigured = true
+    }
+  }
+
+  /// Test-only: reset to unconfigured state (isolation between tests).
+  static func resetForTesting() {
+    jsonlQueue.sync {
+      jsonlWriter?.close()
+      jsonlWriter = nil
+      jsonlMinLevel = nil
+      jsonlConfigured = false
+    }
+  }
+
+  /// Test-only: synchronously drain the jsonlQueue so all pending appends are on disk.
+  static func _syncFlush() {
+    jsonlQueue.sync { /* no-op body; sync acts as a barrier to drain the queue */ }
+  }
+
+  /// Test-only: current min level for the JSONL channel.
+  static var _currentMinLevel: Logger.Level? {
+    jsonlQueue.sync { jsonlMinLevel }
   }
 }

@@ -21,3 +21,5 @@
 - [2026-07-17] 给链预编译 dylib 的原生 xcodeproj app 加 hosted XCTest target 的 6 个坑（模块名大写/独立 xcconfig/不继承 bridging header/Debug 单档/不重链 dylib/TSan 不可用） | tags: testing, xctest, xcodeproj, hosted-test, module-name, bridging-header, testability, iina, tsan | → patterns.md
 - [2026-07-17] xcodeproj gem 注入 target 非语义重排 pbxproj；用 showBuildSettings 核验既有 target 零语义改动 | tags: xcodeproj, gem, pbxproj, non-semantic, diff, showbuildsettings, verification, c7 | → patterns.md
 - [2026-07-18] 测试 seam（static var Thread?）后台写致 TSan data race；后台捕获 Thread + 主线程写修复 | tags: tsan, test-seam, data-race, concurrency, thread, xctest | → patterns.md
+- [2026-07-19] iina-cli（main.swift）顶层 private let 首次访问致 SIGSEGV；改 private var 计算属性绕过 | tags: swift, main-swift, private-let, sigsegv, cli, iina, dispatch-once, computed-property | → patterns.md
+- [2026-07-19] iina-cli build 产物在项目内 build/Debug/ 不在 DerivedData app bundle；增量需删产物强制 | tags: xcodebuild, iina-cli, build-products, deriveddata, incremental, copy-phase, iina | → patterns.md
