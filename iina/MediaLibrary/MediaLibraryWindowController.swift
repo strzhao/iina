@@ -35,9 +35,28 @@ class MediaLibraryWindowController: NSWindowController {
     viewController.onOpenItem = { item in
       PlayerCore.activeOrNew.openURL(item.url)
     }
-    // TV show selection handler: push the episode list as a sheet/child VC.
-    viewController.onSelectTVShow = { [weak self] item in
-      self?.showEpisodeList(for: item)
+    // TV show selection handler: open the whole show as an mpv playlist via `openURLs`, with the
+    // continue-watching episode (or first if none) placed first so mpv opens it and the rest are
+    // appended. The user switches episodes via IINA's existing playlist panel (OSC toolbar button)
+    // — we do NOT show any floating/sidebar panel here. Resume position is supplied by mpv
+    // `resumePlayback` (reads watch-later) on the first (continue-watching) episode — no manual
+    // seek, which would race with openURL's async file load (plan-reviewer B1).
+    viewController.onSelectTVShow = { item in
+      guard let tvShowId = item.tvShowId else {
+        PlayerCore.activeOrNew.openURL(item.url)
+        return
+      }
+      let store = MediaLibraryStore.shared
+      let episodes = store.tvShowEpisodes(tvShowId: tvShowId)
+      guard !episodes.isEmpty else {
+        PlayerCore.activeOrNew.openURL(item.url)
+        return
+      }
+      // Continue-watching episode first: mpv opens it and `resumePlayback` auto-resumes; the rest
+      // are appended to the mpv playlist for the user to switch via the existing playlist panel.
+      let target = store.lastWatchedEpisode(tvShowId: tvShowId) ?? episodes[0]
+      let ordered = [target] + episodes.filter { $0.url != target.url }
+      PlayerCore.activeOrNew.openURLs(ordered.map { $0.url })
     }
 
     contentViewController = viewController
@@ -63,26 +82,5 @@ class MediaLibraryWindowController: NSWindowController {
   /// media surfaces without restarting the app.
   func refresh() {
     viewController.refresh()
-  }
-
-  // MARK: Episode list
-
-  private func showEpisodeList(for item: MediaItem) {
-    guard let tvShowId = item.tvShowId else { return }
-    let episodes = MediaLibraryStore.shared.tvShowEpisodes(tvShowId: tvShowId)
-    let lastWatched = MediaLibraryStore.shared.lastWatchedEpisode(tvShowId: tvShowId)
-    let episodeVC = EpisodeListViewController(episodes: episodes, lastWatched: lastWatched)
-    episodeVC.onOpenEpisode = { ep in
-      PlayerCore.activeOrNew.openURL(ep.url)
-    }
-    let panel = NSPanel(contentViewController: episodeVC)
-    panel.title = item.cleanedName
-    panel.styleMask = [.titled, .closable, .resizable]
-    panel.setFrame(NSRect(x: 0, y: 0, width: 480, height: 560), display: true)
-    panel.isFloatingPanel = true
-    panel.hidesOnDeactivate = false
-    panel.center()
-    window!.addChildWindow(panel, ordered: .above)
-    panel.makeKeyAndOrderFront(nil)
   }
 }

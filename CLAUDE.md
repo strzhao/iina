@@ -57,7 +57,7 @@ xcodebuild -project iina.xcodeproj -scheme iina -configuration Debug -destinatio
   xcodebuild test -project iina.xcodeproj -scheme iina -configuration Debug -destination 'platform=macOS'
   # 或显式开覆盖率：-enableCodeCoverage YES
   ```
-- **当前结果**：23 个测试通过（FileNameCleaner / MediaItem acceptance + TestHarnessAcceptance canary），代码覆盖率 ~11%
+- **当前结果**：99 个测试通过（`xcodebuild test -only-testing iinaTests` 实测 99 tests 0 failures，覆盖 FileNameCleaner / MediaItem acceptance / TestHarnessAcceptance canary / IINALogWriter / LoggerJSONL / MediaLibraryPerf 等），代码覆盖率 ~11%
 - **模块名是大写 `IINA`**（PRODUCT_MODULE_NAME=IINA），测试须 `@testable import IINA`，不是 `import iina`
 - test target host 在 IINA.app（TEST_HOST/BUNDLE_LOADER），libmpv 符号从宿主解析，无需重链 deps
 - scheme 已开 `codeCoverage` + `TSan` 声明；TSan 全 app 运行因 libmpv 预编译未插桩为**已知局限**（仅声明级，实际 TSan 不能在 libmpv 内部报错）

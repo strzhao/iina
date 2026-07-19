@@ -11,9 +11,7 @@
 		03D0170F12DA9D5D261BDF05 /* iinaUITestsSmoke.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF22C5C6564413154FCE7F97 /* iinaUITestsSmoke.swift */; };
 		0B8CE2E388EE897F61CB8F2C /* IINALogConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F37640D46CC85F4A703A9FB /* IINALogConfig.swift */; };
 		103B674DF92FB467400218B6 /* MediaLibraryPerfCacheHitAsync.acceptance.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F785642B455C61213118D86 /* MediaLibraryPerfCacheHitAsync.acceptance.test.swift */; };
-		11B80CD39EF5360ED012B8E1 /* EpisodeListSidebarViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 462D866C92FB6352A0AEBD4C /* EpisodeListSidebarViewController.swift */; };
 		1326717E20852D0D000FA7E2 /* SubChooseViewController.xib in Resources */ = {isa = PBXBuildFile; fileRef = 1326718020852D0D000FA7E2 /* SubChooseViewController.xib */; };
-		2093889C385F0356BD0098A5 /* SidebarEpisodeListPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33DCF550ED9DD9715E3023AB /* SidebarEpisodeListPane.swift */; };
 		32F6DC230C42CF8D71327030 /* MediaLibraryPerfSmokeRun.acceptance.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A3B484753ABF2493C2B55DF /* MediaLibraryPerfSmokeRun.acceptance.test.swift */; };
 		3412DB8E2C2FC64C00BBC142 /* Equalizations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3412DB8D2C2FC64800BBC142 /* Equalizations.swift */; };
 		3415BC8A2FC82FD9003B3FBD /* TimePreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3415BC892FC82FD5003B3FBD /* TimePreviewView.swift */; };
@@ -726,7 +724,6 @@
 		2FE1FCB01F98D3DB004C4D6B /* sk */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = sk; path = sk.lproj/FilterPresets.strings; sourceTree = "<group>"; };
 		2FE1FCB11F98D3DB004C4D6B /* sk */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = sk; path = sk.lproj/KeyBinding.strings; sourceTree = "<group>"; };
 		3341C3B11CED2EAF42A686FD /* MediaLibraryPerfP1_P5.unit.test.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaLibraryPerfP1_P5.unit.test.swift; sourceTree = "<group>"; };
-		33DCF550ED9DD9715E3023AB /* SidebarEpisodeListPane.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SidebarEpisodeListPane.swift; sourceTree = "<group>"; };
 		3412DB8D2C2FC64800BBC142 /* Equalizations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Equalizations.swift; sourceTree = "<group>"; };
 		3415BC892FC82FD5003B3FBD /* TimePreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimePreviewView.swift; sourceTree = "<group>"; };
 		3465CC8E2FC7217C008DBFB6 /* BufferIndicatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BufferIndicatorView.swift; sourceTree = "<group>"; };
@@ -1170,7 +1167,6 @@
 		440DDE491E9010430063E211 /* ru */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ru; path = ru.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		440DDE4A1E9010430063E211 /* ru */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ru; path = ru.lproj/Localizable.strings; sourceTree = "<group>"; };
 		440DDE4C1E9010440063E211 /* ru */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ru; path = ru.lproj/KeyBinding.strings; sourceTree = "<group>"; };
-		462D866C92FB6352A0AEBD4C /* EpisodeListSidebarViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = EpisodeListSidebarViewController.swift; sourceTree = "<group>"; };
 		49542973216C34950058F680 /* OpenInIINA.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = OpenInIINA.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		49542974216C34950058F680 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = System/Library/Frameworks/Cocoa.framework; sourceTree = SDKROOT; };
 		49542977216C34950058F680 /* SafariExtensionHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariExtensionHandler.swift; sourceTree = "<group>"; };
@@ -2844,8 +2840,6 @@
 				8466BE161D5CDD0300039D03 /* QuickSettingViewController.swift */,
 				8460FBA71D6497490081841B /* PlaylistViewController.swift */,
 				E39EDD812CE2EB9600978036 /* PluginViewController.swift */,
-				462D866C92FB6352A0AEBD4C /* EpisodeListSidebarViewController.swift */,
-				33DCF550ED9DD9715E3023AB /* SidebarEpisodeListPane.swift */,
 			);
 			name = Sidebar;
 			sourceTree = "<group>";
@@ -3533,8 +3527,6 @@
 				84BEEC3F1DFEDE2F00F945CA /* PrefKeyBindingViewController.swift in Sources */,
 				0B8CE2E388EE897F61CB8F2C /* IINALogConfig.swift in Sources */,
 				C5A0B190318DC26ABB4057E6 /* IINALogWriter.swift in Sources */,
-				11B80CD39EF5360ED012B8E1 /* EpisodeListSidebarViewController.swift in Sources */,
-				2093889C385F0356BD0098A5 /* SidebarEpisodeListPane.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
