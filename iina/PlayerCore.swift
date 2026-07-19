@@ -1974,6 +1974,10 @@ class PlayerCore: NSObject {
     if info.state.active {
       log("Write watch later config")
       mpv.command(.writeWatchLaterConfig, level: .verbose)
+      // watch-later is now on disk — notify the media library so its continue-watching strip
+      // re-reads progress. `.iinaHistoryUpdated` fires at `fileLoaded` (before mpv writes
+      // watch-later), so the just-played item is excluded by the progress guard until this signal.
+      postNotification(.iinaPlaybackProgressUpdated)
     }
     if let url = info.currentURL {
       Preference.set(url, for: .iinaLastPlayedFilePath)

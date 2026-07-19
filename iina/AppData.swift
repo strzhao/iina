@@ -162,6 +162,11 @@ extension Notification.Name {
   static let iinaKeyBindingInputChanged = Notification.Name("IINAKeyBindingInputChanged")
   static let iinaFileLoaded = Notification.Name("IINAFileLoaded")
   static let iinaHistoryUpdated = Notification.Name("IINAHistoryUpdated")
+  /// Fired by `PlayerCore.savePlaybackPosition()` after `writeWatchLaterConfig` actually writes the
+  /// watch-later file. The media-library continue-watching strip reads watch-later live, so the
+  /// `.iinaHistoryUpdated` posted at `fileLoaded` time (before mpv writes watch-later) leaves newly
+  /// played items excluded until this later signal triggers a refresh.
+  static let iinaPlaybackProgressUpdated = Notification.Name("IINAPlaybackProgressUpdated")
   static let iinaLegacyFullScreen = Notification.Name("IINALegacyFullScreen")
   static let iinaGlobalKeyBindingsChanged = Notification.Name("iinaGlobalKeyBindingsChanged")
   static let iinaKeyBindingChanged = Notification.Name("iinaKeyBindingChanged")

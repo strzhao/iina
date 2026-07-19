@@ -241,6 +241,10 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
                                            name: MediaLibraryStore.indexLoadedNotification, object: nil)
     NotificationCenter.default.addObserver(self, selector: #selector(historyUpdated),
                                            name: .iinaHistoryUpdated, object: nil)
+    // watch-later written by `savePlaybackPosition` (stop/quit) — refresh to pick up new progress
+    // for items that were excluded at `fileLoaded` time (watch-later not yet written then).
+    NotificationCenter.default.addObserver(self, selector: #selector(historyUpdated),
+                                           name: .iinaPlaybackProgressUpdated, object: nil)
     NotificationCenter.default.addObserver(self, selector: #selector(metadataProbed(_:)),
                                            name: MediaLibraryStore.metadataProbedNotification, object: nil)
     NotificationCenter.default.addObserver(self, selector: #selector(scanProgressUpdated(_:)),
@@ -315,7 +319,9 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
   // MARK: - scan-progress-handler-end
 
   @objc private func historyUpdated() {
-    DispatchQueue.main.async { [weak self] in self?.refresh() }
+    // Light refresh only — history/progress changes affect the continue-watching strip, not the
+    // grid. A full `reloadData` here flickered the wall on every play/stop and stalled quit.
+    DispatchQueue.main.async { [weak self] in self?.refreshContinueWatching() }
   }
 
   /// A lazy metadata probe completed (P3). 100ms tail-coalesce：每个到达 item 必入集合（不丢），
@@ -364,6 +370,17 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
   }
 
   // MARK: Refresh
+
+  /// Light refresh: re-query only the continue-watching strip. Does NOT reload the grid, so it is
+  /// safe to call on playback start/stop and window re-activation without flickering or blocking
+  /// the main thread (the grid is ~1200 items; `reloadData` on every play/stop caused visible
+  /// flicker and stalled app quit). The grid itself is driven by `scanned`/`indexLoaded`/initial
+  /// load where the underlying items actually change.
+  func refreshContinueWatching() {
+    let cwItems = MediaLibraryStore.shared.continueWatchingItems()
+    continueWatchingHeightConstraint.constant = cwItems.isEmpty ? 0 : 130
+    continueWatchingView.update(with: cwItems)
+  }
 
   /// Re-query the store and reload the grid + continue-watching strip.
   func refresh() {

@@ -10,7 +10,7 @@ import Cocoa
 
 /// Independent window controller for the media library, built in code (no xib), mirroring
 /// `HistoryWindowController`'s construction pattern.
-class MediaLibraryWindowController: NSWindowController {
+class MediaLibraryWindowController: NSWindowController, NSWindowDelegate {
 
   private let viewController = MediaLibraryViewController()
 
@@ -30,6 +30,9 @@ class MediaLibraryWindowController: NSWindowController {
     window.setFrameAutosaveName("MediaLibraryWindow_v3")
     window.minSize = NSMakeSize(720, 480)
     super.init(window: window)
+    // Become the window's delegate so `windowDidBecomeKey` fires when the user switches back to
+    // the media-library window (e.g. returns from the player). Used to refresh continue-watching.
+    window.delegate = self
 
     // Playback open handler: open in the active/new player window (relies on watch-later resume).
     viewController.onOpenItem = { item in
@@ -76,11 +79,23 @@ class MediaLibraryWindowController: NSWindowController {
     }
     super.showWindow(sender)
     NSApp.activate(ignoringOtherApps: true)
+    // Refresh so continue-watching reflects progress written since the window was last visible
+    // (watch-later is written on stop/quit → .iinaPlaybackProgressUpdated; a window reopen also
+    // covers the case where that notification arrived while the view was stale).
+    viewController.refreshContinueWatching()
   }
 
   /// Reload library data from the store. Called when the window is reopened so newly added
-  /// media surfaces without restarting the app.
+  /// media surfaces without restarting the app. Full reload (grid may have changed after a scan).
   func refresh() {
     viewController.refresh()
+  }
+
+  // MARK: - NSWindowDelegate
+
+  /// When the user switches back to the media-library window (e.g. returns from the player window),
+  /// re-query continue-watching so newly saved progress surfaces without a restart.
+  func windowDidBecomeKey(_ notification: Notification) {
+    viewController.refreshContinueWatching()
   }
 }
