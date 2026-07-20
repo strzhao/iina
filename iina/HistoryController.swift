@@ -87,6 +87,8 @@ class HistoryController: NSObject {
 
   /// Add an entry to playback history.
   /// - Note: The entry is added asynchronously by a background thread.
+  /// - Important: 修复 A3：若同 mpvMd5 的旧 entry 已有 mpvProgress（由 updateProgress 回写），
+  ///   新 entry 必须继承，禁止被 init 默认 nil 覆盖（否则继续观看的历史进度会丢失）。
   /// - Parameters:
   ///   - url: URL of the media being played.
   ///   - duration: Total duration of the media.
@@ -98,11 +100,18 @@ class HistoryController: NSObject {
     queue.async { [self] in
       let mpvMd5 = Utility.mpvWatchLaterMd5(url, ignorePath)
       $history.withLock { history in
+        // 修复 A3：remove 旧条目前先抓取其 mpvProgress，迁移到新 entry。
+        var inheritedProgress: VideoTime? = nil
         if let existingItem = history.first(where: { $0.mpvMd5 == mpvMd5 }),
            let index = history.firstIndex(of: existingItem) {
+          inheritedProgress = existingItem.mpvProgress
           history.remove(at: index)
         }
         let entry = PlaybackHistory(url: url, duration: duration, title: title, mpvMd5: mpvMd5)
+        // 迁移旧 entry 的 mpvProgress（updateProgress 写入的 IINA 自维护进度源）。
+        if let progress = inheritedProgress, progress.second > 0 {
+          entry.mpvProgress = progress
+        }
         history.insert(entry, at: 0)
         log("Adding to history: \(String(describing: entry))", level: .verbose)
       }
@@ -120,6 +129,36 @@ class HistoryController: NSObject {
       }
       NotificationCenter.default.post(Notification(name: .iinaHistoryTaskFinished))
     }
+  }
+
+  /// 修复 A2/A3 / C1：更新已存在 entry 的 mpvProgress（IINA 自维护的独立进度源）。
+  ///
+  /// PlayerCore.savePlaybackPosition 在 mpv `savePositionOnQuit` 关闭时也调用此方法，
+  /// 确保 watch-later 写失败时仍有 fallback。复用 `add` 的 `queue.async` + `$history.withLock`
+  /// 调度（TSan 安全来自加锁而非主线程同步写）。
+  ///
+  /// - Important: 对不存在的 entry 静默跳过（不创建新条目——`add` 负责 entry 创建）。
+  /// - Parameters:
+  ///   - url: 已在 history 中的 media URL。
+  ///   - progress: 新的播放进度。
+  func updateProgress(url: URL, progress: VideoTime) {
+    $tasksOutstanding.withLock { $0 += 1 }
+    queue.async { [self] in
+      $history.withLock { history in
+        guard let index = history.firstIndex(where: { $0.url == url }) else { return }
+        history[index].mpvProgress = progress
+        log("Updated mpvProgress for \(url.lastPathComponent): \(progress.second)s", level: .verbose)
+      }
+      save()
+      $tasksOutstanding.withLock { $0 -= 1 }
+      NotificationCenter.default.post(Notification(name: .iinaHistoryTaskFinished))
+    }
+  }
+
+  /// 测试 seam：阻塞直到 `queue` 中所有任务完成（add/updateProgress 落盘）。
+  /// 仅供单元测试调用，避免异步竞争。生产代码不应依赖此方法。
+  func waitForDrain() {
+    queue.sync { }
   }
 
   func remove(_ entries: [PlaybackHistory]) {

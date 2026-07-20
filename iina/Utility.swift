@@ -552,15 +552,22 @@ class Utility {
 
   static func playbackProgressFromWatchLater(_ mpvMd5: String) -> VideoTime? {
     let fileURL = Utility.watchLaterURL.appendingPathComponent(mpvMd5)
-    if let reader = StreamReader(path: fileURL.path),
-      let firstLine = reader.nextLine(),
-      firstLine.hasPrefix("start="),
-      let progressString = firstLine.components(separatedBy: "=").last,
-      let progress = Double(progressString) {
+    // 逐行扫描：跳过 `#` 注释行，取首个 `start=` 行解析。
+    // mpv 0.38.0 写 watch-later 时可能首行是注释/redirect（无害噪音），旧实现只读第一行
+    // 会导致读到注释行时返回 nil，把刚播放的剧集错误排除出"继续观看"。
+    guard let reader = StreamReader(path: fileURL.path) else { return nil }
+    while let line = reader.nextLine() {
+      // 跳过注释/空行。
+      if line.hasPrefix("#") || line.isEmpty { continue }
+      guard line.hasPrefix("start="),
+            let progressString = line.components(separatedBy: "=").last,
+            let progress = Double(progressString) else {
+        // 非 start= 行（且非注释）也跳过，继续找首个 start=。
+        continue
+      }
       return VideoTime(progress)
-    } else {
-      return nil
     }
+    return nil
   }
 
   static func getLatestScreenshot(from path: String) -> URL? {

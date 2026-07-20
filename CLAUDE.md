@@ -62,7 +62,7 @@ xcodebuild -project iina.xcodeproj -scheme iina -configuration Debug -destinatio
 - test target host 在 IINA.app（TEST_HOST/BUNDLE_LOADER），libmpv 符号从宿主解析，无需重链 deps
 - scheme 已开 `codeCoverage` + `TSan` 声明；TSan 全 app 运行因 libmpv 预编译未插桩为**已知局限**（仅声明级，实际 TSan 不能在 libmpv 内部报错）
 - 独立构建配置 `Configs/iinaTests.xcconfig`（显式声明 HEADER/LIBRARY_SEARCH_PATHS，Shared.xcconfig 不含这些；不设 bridging header；仅 Debug 单档）
-- **仍有 11 个 `tests/*.acceptance.test.swift` 未接入**（依赖 NAS/ffmpeg IO 或完整 app 启动环境）。未来接入时须把 `@testable import iina` 改为 `@testable import IINA`（模块名大写），并补齐夹具可见性
+- **`tests/*` 接入策略**：已接入的测试文件（含 `*Tests.swift` 单测和部分 `.acceptance.test.swift` 红队）统一 `@testable import IINA`（模块名大写），由 `xcodeproj` gem 注入 iinaTests Sources Build Phase；依赖 hosted app 环境的 acceptance 在 Sources 里但实际跑需 IINA.app 宿主就绪。新增测试须沿用大写模块名，否则过编失败
 - 访问 VC/Item 成员需 internal 可见性（关键成员已改 internal），夹具 `MediaLibraryStore.setItemsForTesting` 已补
 - **视频墙 P1-P5 性能优化**（`b9dbb91e`）：写盘移出主线程+合并（scheduleSaveIndex）/ 搜索 0.15s 防抖（searchDebounceWorkItem）/ 启动后台 loadIndexAsync / `MediaItem.cleanedNameLowercased` 预计算 / 缩略图 cache-hit 移入 queue.async。新增测试 seam：`MediaLibraryStore.disableRescanForTesting`（禁扫真 NAS）、`reloadIndexForTesting`、`__test_lastIndexLoadThread`/`__test_lastCacheHitThread`（写回主线程避 TSan race）、`MediaLibraryViewController.reloadDataCallCount`；配套 `MediaLibraryPerfP1_P5.unit.test` + 6 红队 acceptance（尚未接入 xcodebuild test，依赖 hosted app 环境）
 - **GUI 行为测试 `iinaUITests`（XCUITest）**：测视频墙/剧集面板等真实 GUI（host IINA.app，独立 `iinaUITests.xcconfig` + entitlements）。scheme 已含，`xcodebuild test` 自动带上，或 `-only-testing iinaUITests`。**4 层突破**（参考 `iinaUITestsSmoke.swift`）：① entitlements `disable-library-validation`（否则 XCUIApplication 附载宿主即崩）② launchArguments seam 注入测试媒体 ③ NSCollectionView cells 在 AX 树是 Group 语义（查 `collectionViews`/`images`，非 `cells`）④ 一律 `waitForExistence` 等渲染，不假设同步。
@@ -110,4 +110,7 @@ iina version
 
 - mpv/player core 的 `ignorePathInWatchLaterConfig` 影响 md5 匹配，测试夹具须与生产一致（`ignorePath=false`）
 - `PlaybackHistory.duration` 是 `VideoTime`（非 Double），`MediaItem.duration` 是 `Double?`——跨类型比较须转换
+- **`PlaybackHistory.mpvProgress` 是 IINA 自持久化的独立进度源**（`KeyMpvProgress`，encode NSNumber/Double seconds），**不是** mpv watch-later 的派生镜像——`init(coder:)` 在旧 plist（无 KeyMpvProgress）时 fallback `Utility.playbackProgressFromWatchLater(mpvMd5)`，新 plist 直接读持久化值。运行时回写由 `PlayerCore.savePlaybackPosition → HistoryController.updateProgress`（已置于 `savePositionOnQuit` guard **之前**，覆盖 mpv 关 watch-later 或写失败场景）。`HistoryController.add` 同 mpvMd5 旧条目 replace 时**必须迁移** `mpvProgress`（否则被 init 默认 nil 覆盖，继续观看入口消失）
+- `MediaLibraryStore.continueWatchingItems` / `progress(for:)` 的进度读取顺序：① `Utility.playbackProgressFromWatchLater`（live 值）② nil 时 fallback `entry.mpvProgress?.second`（持久化）。改这块时两条路径都要兼顾
+- `Utility.playbackProgressFromWatchLater` 逐行扫描跳过 `#` 注释行（mpv 0.38.0 可能首行是注释，旧实现只读第一行会误判为无进度），取首个 `start=` 行解析
 - GUI app 的 `Logger.log` 可能 buffer（stderr 未 flush），用 marker 文件更可靠

@@ -289,17 +289,30 @@ final class MediaLibraryStore: NSObject {
       if let d = item.duration { durationSec = d }
       else if entry.duration.second > 0 { durationSec = entry.duration.second }
       else { continue }
-      // Progress guard: read watch-later LIVE (not entry.mpvProgress, which is a startup snapshot
-      // set once in PlaybackHistory.init(coder:) and never refreshed — newly played entries have
-      // mpvProgress==nil and wouldn't appear until restart). This makes continue-watching reflect
-      // the latest playback without restarting.
-      guard let progressSec = Utility.playbackProgressFromWatchLater(entry.mpvMd5)?.second,
-            progressSec > 0 else { continue }
+      // 修复 A4 / C2：读 watch-later 失败时 fallback 到 entry.mpvProgress?.second
+      // （IINA 自持久化的独立进度源，PlayerCore.savePlaybackPosition 回写）。
+      // 这覆盖 mpv 写 watch-later 失败的场景（NAS I/O 时序 / pos=NOPTS）：
+      // 旧实现无 fallback 导致"继续观看"入口错误消失。
+      guard let progressSec = progressSec(for: entry), progressSec > 0 else { continue }
       if progressSec >= durationSec * MediaLibraryStore.watchedThreshold { continue }
       pairs.append((item: item, addedDate: entry.addedDate))
     }
     pairs.sort { $0.addedDate > $1.addedDate }
     return Array(pairs.prefix(MediaLibraryStore.continueWatchingLimit)).map { $0.item }
+  }
+
+  /// 修复 A4 / C2：统一的进度读取 helper（watch-later 优先，fallback 到 entry.mpvProgress）。
+  ///
+  /// 读取顺序：
+  ///   1. `Utility.playbackProgressFromWatchLater(mpvMd5)`（live 值，反映最新播放）。
+  ///   2. nil 时 fallback `entry.mpvProgress?.second`（IINA 自持久化的独立进度源）。
+  ///
+  /// fallback 值仍需过调用方的 watchedThreshold / progress>0 guard（不在 helper 内判定）。
+  private func progressSec(for entry: PlaybackHistory) -> Double? {
+    if let live = Utility.playbackProgressFromWatchLater(entry.mpvMd5)?.second {
+      return live
+    }
+    return entry.mpvProgress?.second
   }
 
   /// All episodes of a TV show, sorted by episode number.
@@ -354,10 +367,21 @@ final class MediaLibraryStore: NSObject {
   /// Playback progress (seconds) for a media item, read LIVE from watch-later. Returns nil if no
   /// watch-later file / no `start=`. Reading live (rather than `entry.mpvProgress`, a startup
   /// snapshot) keeps card progress bars current after new playback without restarting.
+  ///
+  /// 修复 A4 / C2：watch-later 读不到时 fallback 到 entry.mpvProgress?.second（独立进度源），
+  /// 覆盖 mpv 写 watch-later 失败（NAS I/O 时序 / pos=NOPTS）场景。
   func progress(for item: MediaItem) -> Double? {
     let ignorePath = currentIgnorePath()
     let md5 = Utility.mpvWatchLaterMd5(item.url, ignorePath)
-    return Utility.playbackProgressFromWatchLater(md5)?.second
+    if let live = Utility.playbackProgressFromWatchLater(md5)?.second {
+      return live
+    }
+    // Fallback：通过 md5 找 history entry，读 IINA 自持久化的 mpvProgress。
+    let history = HistoryController.shared.history
+    if let entry = history.first(where: { $0.mpvMd5 == md5 }) {
+      return entry.mpvProgress?.second
+    }
+    return nil
   }
 
   // MARK: Persistence

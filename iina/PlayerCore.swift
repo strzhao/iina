@@ -1968,6 +1968,15 @@ class PlayerCore: NSObject {
   }
 
   func savePlaybackPosition() {
+    // 修复 A2：mpvProgress 回写提到 savePositionOnQuit guard 之前。
+    // 即使用户关闭 mpv 的 watch-later（或 watch-later 写失败：NAS I/O 时序、pos=NOPTS），
+    // IINA 仍要把当前 videoPosition 持久化到 history.plist，作为独立 fallback 进度源。
+    // 这样 MediaLibraryStore.continueWatchingItems 读不到 watch-later 时能 fallback 到
+    // entry.mpvProgress，避免"继续观看"入口错误消失。
+    if info.state.active, let url = info.currentURL, let position = info.videoPosition?.second, position > 0 {
+      HistoryController.shared.updateProgress(url: url, progress: VideoTime(position))
+    }
+
     guard mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit) else { return }
 
     // The player must be active to be able to save the watch later configuration.

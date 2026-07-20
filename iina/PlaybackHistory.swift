@@ -15,6 +15,11 @@ fileprivate let KeyPlayed = "IINAPHPlayed"
 fileprivate let KeyAddedDate = "IINAPHDate"
 fileprivate let KeyDuration = "IINAPHDuration"
 fileprivate let KeyTitle = "IINAPHTitle"
+/// IINA 自持久化的独立播放进度（seconds, Double）。
+/// 设计偏差：VideoTime 不是 NSSecureCoding，故 encode 为 Double（与 KeyDuration 一致）。
+/// 修复 A1：mpvProgress 不再只是 watch-later 的派生镜像，而是 IINA 独立持久化的进度源，
+/// 当 watch-later 文件缺失/被覆盖（mpv pos=NOPTS、NAS I/O 时序）时提供 fallback。
+fileprivate let KeyMpvProgress = "IINAPHMpvProgress"
 
 /// An entry in the playback history file.
 /// - Important: This class conforms to [NSSecureCoding](https://developer.apple.com/documentation/foundation/nssecurecoding).
@@ -77,7 +82,18 @@ class PlaybackHistory: NSObject, NSSecureCoding {
     self.duration = VideoTime(duration)
     self.title = title as String?
 
-    self.mpvProgress = Utility.playbackProgressFromWatchLater(mpvMd5)
+    // 修复 A1：优先 decode IINA 自持久化的 mpvProgress（KeyMpvProgress, Double seconds）。
+    // containsValueForKey 区分"键存在" vs "键缺失（旧 plist）"：
+    //   - 旧 plist（无 KeyMpvProgress）：fallback 到 watch-later 读取，保持旧行为。
+    //   - 新 plist 含 KeyMpvProgress：用持久化值（> 0；0 或负数视作无效，fallback watch-later）。
+    if aDecoder.containsValue(forKey: KeyMpvProgress),
+       let secBox = aDecoder.decodeObject(of: NSNumber.self, forKey: KeyMpvProgress) as? NSNumber {
+      let sec = secBox.doubleValue
+      self.mpvProgress = sec > 0 ? VideoTime(sec) : Utility.playbackProgressFromWatchLater(self.mpvMd5)
+    } else {
+      // 向后兼容：旧 plist 无 KeyMpvProgress，fallback 现 watch-later 逻辑。
+      self.mpvProgress = Utility.playbackProgressFromWatchLater(self.mpvMd5)
+    }
   }
 
   init(url: URL, duration: Double, name: String? = nil, title: String?, mpvMd5: String) {
@@ -98,5 +114,11 @@ class PlaybackHistory: NSObject, NSSecureCoding {
     aCoder.encode(addedDate, forKey: KeyAddedDate)
     aCoder.encode(duration.second, forKey: KeyDuration)
     aCoder.encode(title, forKey: KeyTitle)
+    // 修复 A1：持久化 IINA 自维护的 mpvProgress（独立于 mpv watch-later）。
+    // 只在 mpvProgress 非 nil 且 > 0 时写入（避免 encode(0) 被 NSCoder 当作 Int 导致 decodeDouble 失败）。
+    // 缺失该键时 decode 路径走 fallback（watch-later），保持旧 plist 向后兼容。
+    if let progress = mpvProgress, progress.second > 0 {
+      aCoder.encode(NSNumber(value: progress.second), forKey: KeyMpvProgress)
+    }
   }
 }
