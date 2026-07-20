@@ -10,7 +10,7 @@
 - [2026-07-13] IINA GUI 验证：AX 窗口不可见，用 CGWindowList+CGEvent+screencapture+图像分析 | tags: iina, gui, verification, cgwindowlist, cgevent, ax, automation | → patterns.md
 - [2026-07-17] XCUITest 在 IINA 可用（纠正"AX 完全不可见"）：4 层突破（library validation 非 Team/launchArguments seam/NSCollectionView Group/waitForExist） | tags: iina, xcuitest, ax, library-validation, launcharguments, nscollectionview, codesign, entitlements, testing | → patterns.md
 - [2026-07-13] 后台扫描失败保留缓存 + 自定义 Error 须暴露 underlying | tags: iina, medialibrary, rescan, error-handling, robustness, localizederror | → patterns.md
-- [2026-07-13] PlaybackHistory.mpvProgress 是启动快照，运行时进度查询须实时读 watch-later | tags: iina, playbackhistory, watch-later, mpv, progress, medialibrary | → patterns.md
+- [2026-07-13] 进度类 UI 判据须有自持久化 fallback，不能只依赖单一外部异步数据源（mpv watch-later） | tags: iina, playbackhistory, watch-later, mpv, progress, medialibrary, fallback, debugging | → patterns.md
 - [2026-07-13] PlaybackHistory.played 字段语义坏（add 硬编码 true），不可作过滤判据 | tags: iina, playbackhistory, played, continue-watching | → patterns.md
 - [2026-07-15] avformat_find_stream_info 无条件调用致 NAS 文件 EXC_BAD_ACCESS 崩溃 | tags: iina, ffmpeg, libavformat, find-stream-info, nas, crash, probe | → patterns.md
 - [2026-07-15] 懒加载 + 通知 reload 无限循环致列表闪烁（probeMetadata probedKeys） | tags: iina, medialibrary, probemetadata, notification, reload, flicker, loop | → patterns.md
@@ -28,3 +28,4 @@
 - [2026-07-20] 依赖异步写盘（watch-later）的 UI 刷新须在写盘后触发；高频路径禁全量 reloadData | tags: medialibrary, continue-watching, watch-later, refresh-timing, reloaddata, performance, flicker, mpv, nscollectionview, iina | → patterns.md
 - [2026-07-20] iinaTests（unit test）污染生产 index.plist；XCUI 有 testDataRoot 但 unit test 无 | tags: testing, iinatests, unit-test, test-isolation, nskeyedarchiver, pollution, testdataroot, iina | → patterns.md
 - [2026-07-20] python plistlib 解 NSKeyedArchiver 诊断 IINA 运行时数据（history/index/watch_later） | tags: debugging, nskeyedarchiver, plistlib, python, runtime-data, iina, history, medialibrary | → patterns.md
+- [2026-07-21] mpv watch-later 父目录 redirect 是无害噪音；文件缺失诊断用 mtime 对照 + plistlib 交叉匹配 | tags: iina, mpv, watch-later, redirect, forensic, debugging, mpv038, nskeyedarchiver | → patterns.md

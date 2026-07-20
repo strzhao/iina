@@ -40,11 +40,11 @@
 **Lesson**: ① 后台扫描/同步失败时**保留上次成功缓存**（loadIndex 加载的 items），只上报错误提示不清空——瞬时失败不应丢用户数据视图（直接 swift 扫描 NAS 全成功可证 IINA rescan 失败是瞬时 I/O，非代码 bug）；② 自定义 Error enum 若 wrap 了 underlying（如 `case scanFailed(url:, underlying: Error)`），**必须**在显示层模式匹配取 underlying 暴露（`case .scanFailed(_, let underlying): label = underlying.localizedDescription`），否则 localizedDescription 只剩无用的 enum 默认描述
 **Evidence**: 用户真机验收报「扫描目录时出错（错误1）」；swift 直接扫描 NAS 68+68 子目录全成功；修 rescan 不清空 + showError 暴露 underlying 后，视频墙显示缓存数据 + 真实 Cocoa error（核对锚点：2026-07-13 commit ccdfd796 MediaLibraryStore.rescan / MediaLibraryViewController.showError）
 
-### [2026-07-13] PlaybackHistory.mpvProgress 是启动快照，运行时进度查询须实时读 watch-later
-<!-- tags: iina, playbackhistory, watch-later, mpv, progress, medialibrary, debugging -->
-**Scenario**: 媒体库「继续观看」卡片无进度条 + 播放新视频后列表不实时更新（需重启 IINA 才刷新）
-**Lesson**: `PlaybackHistory.mpvProgress` 仅在 `init(coder:)` 解码 history.plist 时从 watch-later 读一次（启动快照），`encode` 不持久化它；而运行时 `HistoryController.add` 走 `init(url:duration:name:title:mpvMd5:)`，该 init **不设 mpvProgress**（默认 nil）。后果：①新播放条目 mpvProgress=nil；②已存在条目的 mpvProgress 是启动值，不随播放刷新。运行时进度查询（继续观看列表、卡片进度条）**必须实时读** `Utility.playbackProgressFromWatchLater(mpvMd5)`，不能依赖 `entry.mpvProgress`，否则要重启才更新
-**Evidence**: 用户真机验收「没进度 + 不实时更新」；`MediaLibraryStore.continueWatchingItems` 与 `progress(for:)` 从 `entry.mpvProgress?.second` 改为 `Utility.playbackProgressFromWatchLater(md5)?.second` 后，播放新视频即时进列表 + 卡片进度条实时显示（核对锚点：2026-07-13 commit 8ad46797 MediaLibraryStore.swift）
+### [2026-07-13] 进度类 UI 判据须有自持久化 fallback，不能只依赖单一外部异步数据源（mpv watch-later）
+<!-- tags: iina, playbackhistory, watch-later, mpv, progress, medialibrary, fallback, debugging -->
+**Scenario**: 进度类 UI 状态（「继续观看」列表/卡片进度条）依赖播放进度，而进度源是 mpv 异步写的 watch-later 文件——mpv 在 stop/quit 才写，且可能因 NAS I/O / pos=NOPTS 写失败。只依赖它会导致 UI 状态丢失（入口消失）。
+**Lesson**: 进度类 UI 状态判据**不能只依赖单一外部异步数据源**，必须有应用自持久化的 fallback——否则外部写失败直接导致 UI 状态丢失。`PlaybackHistory.mpvProgress` 的演进印证：①初版只是 watch-later 的派生镜像（解码时读一次、`encode` 不持久化、`add` 不设），watch-later 缺失即空；②升级为 IINA 自持久化独立进度源后（encode 持久化 seconds + `savePlaybackPosition` 运行时回写 + `add` 同 md5 迁移），watch-later 读不到时 fallback 到它，入口不再消失。读取顺序固定：live watch-later 优先（含 mpv 其他保存配置更完整）→ fallback 自持久化值；两者均须过 watchedThreshold / progress>0 判据。回写须独立于 mpv 偏好（置于 `savePositionOnQuit` guard 之前），否则偏好关闭时 fallback 源也写不进。
+**Evidence**: (案例1: 2026-07-13) 初版派生镜像致「没进度+不实时更新」，改实时读 watch-later 修复（commit 8ad46797）。(案例2: 2026-07-21) 实时读 watch-later 在 mpv 写失败时仍丢入口（怪奇物语 S03E01：mpv 日志 5 次 Write watch-later 但 watch_later 目录零文件变动，进度文件 ABSENT），升级 mpvProgress 为自持久化独立源 + `MediaLibraryStore.progressSec(for:)` 双路径 fallback 修复（commit 65290dba；核对锚点：2026-07-21 PlaybackHistory.swift KeyMpvProgress / MediaLibraryStore.progressSec(for:) / PlayerCore.savePlaybackPosition guard 前置）
 
 ### [2026-07-13] PlaybackHistory.played 字段语义坏，不可作「已看完」过滤判据
 <!-- tags: iina, playbackhistory, played, continue-watching, debugging -->
@@ -147,3 +147,9 @@
 **Scenario**: 诊断"继续观看看不到剧集"需验证 history.plist（PlaybackHistory）/ index.plist（MediaItem）/ watch_later/（mpv 进度）真实状态。这些是 NSKeyedArchiver 二进制 plist，`plutil -p` 输出 CFKeyedArchiverUID 引用不展开，难读 url/md5/duration 关联。
 **Lesson**: ① **python3 + plistlib 解 NSKeyedArchiver**：`plistlib.load()` 返回 `{'$top':..., '$objects':[...]}`，`$objects` 扁平数组；CF$UID 解为 `plistlib.UID`（`.data` = 索引），递归 `deref(x)`：UID → `o[x.data]`；dict 含 `NS.relative`（NSURL）→ 递归解 relative；含 `NS.string` → 递归解 string；否则原值。② **逐条关联**：遍历 `$objects` 找含目标 key（IINAPHUrl/MIUrl）的 dict，deref url/md5/duration 关联成可读记录。③ **比读代码推测可靠**：GUI app 运行时数据用此法实证"数据层正常 vs 逻辑层 bug"，避免在"理论上应匹配"里打转（本轮靠它确认第5集磁盘数据齐全，根因转向刷新时机 [[continue-watching-refresh-timing]]）。④ **md5 复现**：file URL 的 `mpvWatchLaterMd5(ignorePath=false)` = `hashlib.md5(url.path.encode()).hexdigest()`，对比 watch_later/ 文件名（mpv 大写 / python 小写，macOS 大小写不敏感）。
 **Evidence**: 解 history.plist 35 entries + index.plist 1228 MediaItem，确认第5集 matched（items.first fallback）+ progress 30%，数据层 OK_PASS；artifact 见 task 20260719-我刚点击了剧集长安的。
+
+### [2026-07-21] mpv watch-later 父目录 redirect 是无害噪音；文件缺失诊断用 mtime 对照 + plistlib 交叉匹配
+<!-- tags: iina, mpv, watch-later, redirect, forensic, debugging, mpv038, nskeyedarchiver -->
+**Scenario**: 诊断「继续观看入口消失」需判断 mpv 写的 watch-later 文件是否存在 / key 是否匹配 / 格式是否可读。较新 mpv 会在 watch_later 目录产生看似异常的 `# redirect entry` 文件，易误判为 bug。
+**Lesson**: ① 较新 mpv 的 `write_redirects_for_parent_dirs` 会为播放文件的**每个父目录**额外写 `# redirect entry` 文件（"按目录 resume"功能，**非进度文件，无 start=**），IINA 按文件 resume 不读它——是无害噪音，不是 bug 原因。② watch_later 目录两类文件须区分：进度文件（`start=<秒>`，文件名=md5(path 或 filename，取决于 ignore-path-in-watch-later-config)）vs 父目录 redirect（`# redirect entry` 一行，文件名=md5(父目录路径)）。③ **IINA 与 mpv 的 md5 key 同源**（CJK 路径在 NFC/NFD 下 md5 相同，排除规范化假设），文件缺失是 mpv 侧写失败（NAS I/O / pos=NOPTS）而非 key 不符。④ **诊断方法**：mtime 对照 mpv `Write watch later config` 日志（日志 UTC，文件 mtime CST，+8 换算）确认文件是否真生成；python plistlib 解 history.plist 拿 (url,mpvMd5) 对，与 watch_later 目录文件名交叉算匹配率，区分"md5 不符"vs"文件未生成"。
+**Evidence**: 怪奇物语 S03E01：history.plist mpvMd5=F5EC3F60(=md5 path) 在 watch_later ABSENT，但其 5 个父目录 md5 全命中 `# redirect entry`；mpv 日志 5 次 Write watch-later 但目录零文件变动→mpv 写失败（非 key/格式）；40 文件=22 进度+18 父目录 redirect（核对锚点：2026-07-21 mpv v0.38.0 player/configfiles.c write_redirects_for_parent_dirs）
