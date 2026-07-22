@@ -133,7 +133,7 @@ final class MediaLibraryPerfSmokeRunAcceptanceTests: XCTestCase {
     )
     let cell = ContinueWatchingCollectionViewItem()
     _ = cell.view
-    cell.configure(with: item, ignorePath: false)
+    cell.configure(with: ContinueWatchingEntry(item: item, progressSec: 50, durationSec: 100, displayName: item.cleanedName), ignorePath: false)
 
     let exp = expectation(description: "cache-hit seam set")
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { exp.fulfill() }

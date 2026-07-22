@@ -76,7 +76,7 @@ final class MediaLibraryPerfCacheHitAsyncAcceptanceTests: XCTestCase {
       Thread.isMainThread,
       "P5.1 前置：configure 必须在主线程调用（生产路径）"
     )
-    cell.configure(with: item, ignorePath: false)
+    cell.configure(with: ContinueWatchingEntry(item: item, progressSec: 50, durationSec: 100, displayName: item.cleanedName), ignorePath: false)
 
     // configure 返回后 cache-hit 异步读 PNG 应在后台执行；
     // 等待 seam 被记录（异步入队 + 读 PNG）
@@ -190,7 +190,7 @@ final class MediaLibraryPerfCacheHitAsyncAcceptanceTests: XCTestCase {
     var worstCaseNs: UInt64 = 0
     for item in items {
       let start = DispatchTime.now()
-      cell.configure(with: item, ignorePath: false)
+      cell.configure(with: ContinueWatchingEntry(item: item, progressSec: 50, durationSec: 100, displayName: item.cleanedName), ignorePath: false)
       let end = DispatchTime.now()
       let elapsed = end.uptimeNanoseconds - start.uptimeNanoseconds
       if elapsed > worstCaseNs { worstCaseNs = elapsed }
@@ -223,7 +223,7 @@ final class MediaLibraryPerfCacheHitAsyncAcceptanceTests: XCTestCase {
     )
     let cell = ContinueWatchingCollectionViewItem()
     _ = cell.view
-    cell.configure(with: item, ignorePath: false)
+    cell.configure(with: ContinueWatchingEntry(item: item, progressSec: 50, durationSec: 100, displayName: item.cleanedName), ignorePath: false)
 
     // 等异步读 + 主线程设 image 完成
     let exp = expectation(description: "image set on main thread")
@@ -274,7 +274,7 @@ final class MediaLibraryPerfCacheHitAsyncAcceptanceTests: XCTestCase {
 
     // 主线程上调用 configure
     XCTAssertTrue(Thread.isMainThread)
-    cell.configure(with: item, ignorePath: false)
+    cell.configure(with: ContinueWatchingEntry(item: item, progressSec: 50, durationSec: 100, displayName: item.cleanedName), ignorePath: false)
 
     // 等异步读 + 主线程设 image
     let exp = expectation(description: "main-thread image set")

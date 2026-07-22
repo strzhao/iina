@@ -19,11 +19,13 @@ class ContinueWatchingView: NSView, NSCollectionViewDataSource, NSCollectionView
   private let scrollView = NSScrollView()
   private let collectionView: NSCollectionView
   private let titleLabel = NSTextField(labelWithString: "继续观看")
-  private var items: [MediaItem] = []
+  private var items: [ContinueWatchingEntry] = []
   private let flowLayout: NSCollectionViewFlowLayout
 
-  /// Called when the user double-clicks a continue-watching item.
+  /// Called when the user opens a non-TV continue-watching item (direct playback).
   var onOpenItem: ((MediaItem) -> Void)?
+  /// B.2：剧集入口点击 → 打开整剧续播（对偶 onOpenItem；与主网格 onSelectTVShow 分流一致）。
+  var onSelectTVShow: ((MediaItem) -> Void)?
 
   override init(frame frameRect: NSRect) {
     flowLayout = NSCollectionViewFlowLayout()
@@ -75,8 +77,8 @@ class ContinueWatchingView: NSView, NSCollectionViewDataSource, NSCollectionView
     ])
   }
 
-  /// Update the displayed items.
-  func update(with items: [MediaItem]) {
+  /// Update the displayed entries (representative item + precomputed progress).
+  func update(with items: [ContinueWatchingEntry]) {
     self.items = items
     titleLabel.stringValue = items.isEmpty ? "" : "继续观看"
     isHidden = items.isEmpty
@@ -93,8 +95,8 @@ class ContinueWatchingView: NSView, NSCollectionViewDataSource, NSCollectionView
     guard let item = collectionView.makeItem(withIdentifier: ContinueWatchingView.itemIdentifier, for: indexPath) as? ContinueWatchingCollectionViewItem else {
       return NSCollectionViewItem()
     }
-    if let mediaItem = items[at: indexPath.item] {
-      item.configure(with: mediaItem, ignorePath: PlayerCore.activeOrNew.ignorePathInWatchLaterConfig)
+    if let entry = items[at: indexPath.item] {
+      item.configure(with: entry, ignorePath: PlayerCore.activeOrNew.ignorePathInWatchLaterConfig)
     }
     return item
   }
@@ -102,8 +104,14 @@ class ContinueWatchingView: NSView, NSCollectionViewDataSource, NSCollectionView
   // MARK: Delegate
 
   func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
-    guard let idx = indexPaths.first?.item, let item = items[at: idx] else { return }
-    onOpenItem?(item)
+    guard let idx = indexPaths.first?.item, let entry = items[at: idx] else { return }
+    // B.2 剧集分流：剧集入口走 onSelectTVShow（整剧续播），其余走 onOpenItem（直接播）。
+    let mediaItem = entry.item
+    if mediaItem.category == .tvShow, mediaItem.tvShowId != nil {
+      onSelectTVShow?(mediaItem)
+    } else {
+      onOpenItem?(mediaItem)
+    }
     collectionView.deselectItems(at: indexPaths)
   }
 }

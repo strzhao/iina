@@ -64,6 +64,16 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
   /// reloadData 增量（连续输入 ≤2，停止 ≥300ms 后 ==1）。
   internal private(set) var reloadDataCallCount: Int = 0
 
+  /// A.1 继续观看防抖：一次 `savePlaybackPosition` 连发 `.iinaHistoryUpdated` +
+  /// `.iinaPlaybackProgressUpdated` 双通知，合并为单次 refresh（对偶 `searchDebounceWorkItem`）。
+  private var historyRefreshDebounceWorkItem: DispatchWorkItem?
+  /// A.1 防抖窗口（s）。与 `searchDebounceInterval` 一致 == 0.15。
+  private let historyRefreshDebounceInterval: TimeInterval = 0.15
+  /// A.2 stale token：防抖窗口内多次 refresh 的后台结果乱序覆盖（仿 `thumbnailToken`）。
+  private var continueWatchingRefreshToken: UInt64 = 0
+  /// A.1 seam：`refreshContinueWatching` 调用计数。红队断言「N 次双通知 → 1 次」（防抖合并）。
+  internal private(set) var continueWatchingRefreshCallCount: Int = 0
+
   /// Height constraint for `continueWatchingView`, toggled in `refresh()` so the strip doesn't
   /// reserve 130pt when empty (Auto Layout keeps a hidden view's frame, so `isHidden` alone
   /// would leave a blank gap at the top).
@@ -233,6 +243,8 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
   override func viewDidLoad() {
     super.viewDidLoad()
     continueWatchingView.onOpenItem = { [weak self] item in self?.openItem(item) }
+    // B.2：剧集继续观看入口 → 复用 VC 的 onSelectTVShow（WindowController 已接整剧续播）。
+    continueWatchingView.onSelectTVShow = { [weak self] item in self?.onSelectTVShow?(item) }
 
     NotificationCenter.default.addObserver(self, selector: #selector(storeScanned(_:)),
                                            name: MediaLibraryStore.scannedNotification, object: nil)
@@ -319,9 +331,22 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
   // MARK: - scan-progress-handler-end
 
   @objc private func historyUpdated() {
+    // A.1 防抖：一次 `savePlaybackPosition` 连发 `.iinaHistoryUpdated` +
+    // `.iinaPlaybackProgressUpdated` 两个通知（见 PlayerCore.savePlaybackPosition），合并为单次
+    // refresh；高频操作（连点暂停/退出）同样合并。0.15s 窗口（与 searchDebounce 一致）。
     // Light refresh only — history/progress changes affect the continue-watching strip, not the
     // grid. A full `reloadData` here flickered the wall on every play/stop and stalled quit.
-    DispatchQueue.main.async { [weak self] in self?.refreshContinueWatching() }
+    scheduleContinueWatchingRefresh()
+  }
+
+  /// A.1：取消上次未触发的 refresh，0.15s 后派发一次。窗口内多次 `historyUpdated` 合并为 1 次。
+  /// `windowDidBecomeKey`/`showWindow` 直调 `refreshContinueWatching` 前会先 cancel 本 workItem，
+  /// 避免延迟 refresh 覆盖即时结果。
+  private func scheduleContinueWatchingRefresh() {
+    historyRefreshDebounceWorkItem?.cancel()
+    let work = DispatchWorkItem { [weak self] in self?.refreshContinueWatching() }
+    historyRefreshDebounceWorkItem = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + historyRefreshDebounceInterval, execute: work)
   }
 
   /// A lazy metadata probe completed (P3). 100ms tail-coalesce：每个到达 item 必入集合（不丢），
@@ -377,17 +402,36 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
   /// flicker and stalled app quit). The grid itself is driven by `scanned`/`indexLoaded`/initial
   /// load where the underlying items actually change.
   func refreshContinueWatching() {
-    let cwItems = MediaLibraryStore.shared.continueWatchingItems()
-    continueWatchingHeightConstraint.constant = cwItems.isEmpty ? 0 : 130
-    continueWatchingView.update(with: cwItems)
+    // A.1：直调（windowDidBecomeKey/showWindow）时取消任何 pending 防抖 refresh，避免延迟
+    // refresh 覆盖本次即时结果。防抖 workItem 的最终动作也是调本方法，cancel 后立即执行等效。
+    historyRefreshDebounceWorkItem?.cancel()
+    historyRefreshDebounceWorkItem = nil
+    // A.2 后台化：主线程取 candidates（廉价匹配/取值）→ 后台算 entries（watch-later IO + 去重，
+    // 不阻塞主线程）→ 主线程 update。stale token 防 0.15s 防抖窗口内多次 refresh 乱序覆盖。
+    continueWatchingRefreshCallCount += 1
+    let store = MediaLibraryStore.shared
+    let candidates = store.continueWatchingCandidates()
+    continueWatchingRefreshToken &+= 1
+    let token = continueWatchingRefreshToken
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      let entries = store.continueWatchingEntries(from: candidates)
+      // A.2 seam：捕获后台计算线程，主线程写（与 __test_lastIndexLoadThread 同构，TSan 安全）。
+      let computeThread = Thread.current
+      DispatchQueue.main.async {
+        guard let self = self, self.continueWatchingRefreshToken == token else { return }
+        store.__test_lastContinueWatchingComputeThread = computeThread
+        self.continueWatchingHeightConstraint.constant = entries.isEmpty ? 0 : 130
+        self.continueWatchingView.update(with: entries)
+      }
+    }
   }
 
   /// Re-query the store and reload the grid + continue-watching strip.
   func refresh() {
     let store = MediaLibraryStore.shared
-    let cwItems = store.continueWatchingItems()
+    let cwEntries = store.continueWatchingEntries(from: store.continueWatchingCandidates())
     // Collapse the continue-watching strip when empty so it doesn't reserve 130pt of blank space.
-    continueWatchingHeightConstraint.constant = cwItems.isEmpty ? 0 : 130
+    continueWatchingHeightConstraint.constant = cwEntries.isEmpty ? 0 : 130
 
     let filter = currentFilter.isEmpty ? nil : currentFilter
     if currentCategory == .tvShow {
@@ -403,7 +447,7 @@ class MediaLibraryViewController: NSViewController, NSCollectionViewDataSource, 
     collectionView.reloadData()
     // P2 seam：reloadData 调用计数（红队 P2.1/P2.2 防抖窗口断言）。
     reloadDataCallCount += 1
-    continueWatchingView.update(with: cwItems)
+    continueWatchingView.update(with: cwEntries)
     if displayedItems.isEmpty {
       // P1-5：isScanning 时显示进度 spinner + label（替代静态"扫描中…"）。spinner/label 已在
       // loadView 构造、由 scanProgressUpdated 驱动文本；此处仅在 refresh 路径上保证它们可见，

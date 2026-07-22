@@ -154,24 +154,20 @@ class ContinueWatchingCollectionViewItem: NSCollectionViewItem {
 
   // MARK: Configuration
 
-  /// Configure the card with a media item and trigger on-demand thumbnail generation.
-  func configure(with item: MediaItem, ignorePath: Bool) {
+  /// Configure the card with a continue-watching entry (representative item + precomputed
+  /// progress/displayName). A.3：进度/剩余时间直接用 entry 预算值（后台已读 watch-later），
+  /// cell 零主线程 IO；仅缩略图加载保留（已异步 + stale guard）。
+  func configure(with entry: ContinueWatchingEntry, ignorePath: Bool) {
+    let item = entry.item
     mediaItem = item
-    titleLabel.stringValue = item.cleanedName
+    titleLabel.stringValue = entry.displayName
     thumbnailView.image = nil
     thumbnailToken &+= 1
-    currentProgressRatio = 0
 
-    // Progress (live from watch-later) + remaining-time label.
-    if let progressSec = MediaLibraryStore.shared.progress(for: item),
-       let duration = item.duration ?? HistoryController.shared.history
-         .first(where: { $0.mpvMd5 == Utility.mpvWatchLaterMd5(item.url, ignorePath) })?
-         .duration.second,
-       duration > 0 {
-      let ratio = min(max(progressSec / duration, 0), 1)
-      currentProgressRatio = ratio
-      let remaining = max(duration - progressSec, 0)
-      remainingLabel.stringValue = "剩 \(ContinueWatchingCollectionViewItem.formatTime(remaining))"
+    // A.3：进度条填充 + 剩余时间徽标，全用 entry 预算值（无 watch-later / history 主线程读）。
+    currentProgressRatio = entry.progressRatio
+    if entry.durationSec > 0 {
+      remainingLabel.stringValue = "剩 \(ContinueWatchingCollectionViewItem.formatTime(entry.remainingSec))"
     } else {
       remainingLabel.stringValue = ""
     }

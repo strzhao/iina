@@ -19,6 +19,8 @@ final class MediaLibraryStoreProgressFallbackTests: XCTestCase {
   /// 唯一的测试 url，避免与生产 NAS 数据冲突。
   private var testUrl: URL!
   private var testMd5: String!
+  /// B.1 去重测试注入的多 url（tearDown 统一清理，避免单例 history 跨测试污染）。
+  private var dedupeUrls: [URL] = []
 
   override func setUp() {
     super.setUp()
@@ -39,10 +41,22 @@ final class MediaLibraryStoreProgressFallbackTests: XCTestCase {
     }
     let watchLaterFile = Utility.watchLaterURL.appendingPathComponent(testMd5)
     try? FileManager.default.removeItem(at: watchLaterFile)
+    // B.1 去重测试注入的多 url（剧集多集）一并清理，避免单例 history 跨测试污染。
+    let urlsToClean = self.dedupeUrls
+    if !urlsToClean.isEmpty {
+      HistoryController.shared.$history.withLock { history in
+        history.removeAll { entry in urlsToClean.contains(entry.url) }
+      }
+      for url in urlsToClean {
+        let md5 = Utility.mpvWatchLaterMd5(url, false)
+        try? FileManager.default.removeItem(at: Utility.watchLaterURL.appendingPathComponent(md5))
+      }
+    }
     MediaLibraryStore.shared.setItemsForTesting([])
     MediaLibraryStore.disableRescanForTesting = false
     testUrl = nil
     testMd5 = nil
+    self.dedupeUrls.removeAll()
     super.tearDown()
   }
 
@@ -154,5 +168,82 @@ final class MediaLibraryStoreProgressFallbackTests: XCTestCase {
     let progress = MediaLibraryStore.shared.progress(for: item)
     XCTAssertEqual(progress ?? -1, 30.0, accuracy: 0.001,
                    "watch-later 存在时必须优先用 live 值（30s）而非 entry.mpvProgress（60s）")
+  }
+
+  // MARK: - B.1 剧集去重：同 tvShowId 合并为单入口
+
+  /// 注入一个剧集 history entry（mpvProgress fallback），返回对应 MediaItem。
+  /// url 记入 dedupeUrls 供 tearDown 清理。
+  private func injectEpisode(showId: String, episode: Int, progressSec: Double,
+                             addedDate: Date, duration: Double = 100.0) -> MediaItem {
+    let url = URL(fileURLWithPath: "/tmp/iina_cw_dedupe_\(UUID().uuidString).mkv")
+    dedupeUrls.append(url)
+    let item = MediaItem(
+      url: url, cleanedName: "\(showId) 第\(episode)集", rawName: "r\(episode)",
+      category: .tvShow, tvShowId: showId, episodeNumber: episode,
+      duration: duration, thumbnailPath: nil as URL?)
+    let md5 = Utility.mpvWatchLaterMd5(url, false)
+    let entry = PlaybackHistory(
+      url: url, duration: duration, name: nil, title: showId, mpvMd5: md5)
+    entry.mpvProgress = VideoTime(progressSec)
+    entry.addedDate = addedDate
+    HistoryController.shared.$history.withLock { $0.insert(entry, at: 0) }
+    return item
+  }
+
+  /// 谓词 B.1：同 tvShowId 的多集合并为单个继续观看入口；代表是 addedDate 最新的集。
+  func test_continueWatching_dedupes_same_tvShow_to_one_entry() {
+    let base = Date()
+    let ep1 = injectEpisode(showId: "测试剧A", episode: 1, progressSec: 50, addedDate: base.addingTimeInterval(-100))
+    let ep2 = injectEpisode(showId: "测试剧A", episode: 2, progressSec: 50, addedDate: base)
+    MediaLibraryStore.shared.setItemsForTesting([ep1, ep2])
+
+    let cw = MediaLibraryStore.shared.continueWatchingItems()
+    XCTAssertEqual(cw.count, 1, "同剧 2 集应聚合为 1 个继续观看入口，实际: \(cw.count)")
+    XCTAssertEqual(cw.first?.url, ep2.url, "代表应为 addedDate 最新的 ep2")
+  }
+
+  /// 谓词 B.1：剧集聚合 + 电影独立 → 入口数 = 剧数 + 电影数。
+  func test_continueWatching_dedupes_shows_but_keeps_movies_separate() {
+    let base = Date()
+    let ep1 = injectEpisode(showId: "测试剧A", episode: 1, progressSec: 50, addedDate: base.addingTimeInterval(-100))
+    let ep2 = injectEpisode(showId: "测试剧A", episode: 2, progressSec: 50, addedDate: base.addingTimeInterval(-90))
+    // 电影用 testUrl（tearDown 已清），独立 dedupeKey。
+    let movie = MediaItem(
+      url: testUrl, cleanedName: "电影X", rawName: "r",
+      category: .movie, tvShowId: nil, episodeNumber: nil,
+      duration: 100.0, thumbnailPath: nil as URL?)
+    let movieEntry = PlaybackHistory(
+      url: testUrl, duration: 100.0, name: nil, title: nil, mpvMd5: testMd5)
+    movieEntry.mpvProgress = VideoTime(50.0)
+    movieEntry.addedDate = base.addingTimeInterval(-50)
+    HistoryController.shared.$history.withLock { $0.insert(movieEntry, at: 0) }
+    MediaLibraryStore.shared.setItemsForTesting([ep1, ep2, movie])
+
+    let cw = MediaLibraryStore.shared.continueWatchingItems()
+    XCTAssertEqual(cw.count, 2, "同剧聚合 1 + 电影 1 = 2 入口，实际: \(cw.count)")
+  }
+
+  /// 谓词 B.1：代表必须是未看完的集——最新集已看完时回退到次新合法集。
+  func test_continueWatching_representative_skips_watched_picks_next_valid() {
+    let base = Date()
+    let ep1 = injectEpisode(showId: "测试剧A", episode: 1, progressSec: 50, addedDate: base.addingTimeInterval(-100))
+    let ep2 = injectEpisode(showId: "测试剧A", episode: 2, progressSec: 96, addedDate: base)  // 已看完
+    MediaLibraryStore.shared.setItemsForTesting([ep1, ep2])
+
+    let cw = MediaLibraryStore.shared.continueWatchingItems()
+    XCTAssertEqual(cw.count, 1, "同剧聚合为 1（ep2 已看完，ep1 代表），实际: \(cw.count)")
+    XCTAssertEqual(cw.first?.url, ep1.url, "代表应为未看完的 ep1")
+  }
+
+  /// 谓词 B.3：剧集入口 displayName = 「剧名 · 第N集」。
+  func test_continueWatching_displayName_for_show_episode() {
+    let base = Date()
+    let ep2 = injectEpisode(showId: "测试剧A", episode: 2, progressSec: 50, addedDate: base)
+    MediaLibraryStore.shared.setItemsForTesting([ep2])
+
+    let entries = MediaLibraryStore.shared.continueWatchingEntries(from: MediaLibraryStore.shared.continueWatchingCandidates())
+    XCTAssertEqual(entries.count, 1, "应返回 1 个 entry，实际: \(entries.count)")
+    XCTAssertEqual(entries.first?.displayName, "测试剧A · 第2集", "剧集 displayName 应为「剧名 · 第N集」")
   }
 }

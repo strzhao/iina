@@ -15,6 +15,47 @@ struct TVShowGroup {
   let episodeCount: Int
 }
 
+/// 主线程构建的「继续观看」候选快照：一条 playback-history entry 匹配到一个 `MediaItem`，
+/// 并把后台计算所需的值字段预提取为值类型。
+///
+/// 设计目的：后台去重/排序 pass 只碰值类型，不碰主线程持有的容器（`history`/`items`/`md5Index`）
+/// 与 `MediaItem`/`PlaybackHistory` 的 var 字段（`duration`/`thumbnailPath`/`mpvProgress`），
+/// 消除数据竞争。`item` 引用仅为 cell 缩略图/点击携带——后台代码不得读其 var 属性，所需字段已
+/// 在此预提取（`durationSec`/`fallbackProgressSec` 等）。
+struct ContinueWatchingCandidate {
+  let mpvMd5: String
+  let item: MediaItem
+  let tvShowId: String?
+  let urlPath: String
+  let addedDate: Date
+  let durationSec: Double
+  let episodeNumber: Int?
+  let cleanedName: String
+  /// IINA 自持久化 fallback 进度（`entry.mpvProgress?.second`），主线程预提取。
+  /// 后台 watch-later 读不到时回退到此值（覆盖 mpv 写失败 / NAS I/O 时序场景）。
+  let fallbackProgressSec: Double?
+}
+
+/// 后台产出、主线程消费的「继续观看」卡片：代表 `MediaItem` + 预算好的进度/时长/显示名。
+/// cell 拿到 entry 后**零 watch-later IO**——进度已在后台算好（主线程 IO 从 N+10 降到 0）。
+struct ContinueWatchingEntry {
+  let item: MediaItem
+  let progressSec: Double
+  let durationSec: Double
+  let displayName: String
+
+  /// 进度条填充比例（0...1，已 clamp）。
+  var progressRatio: Double {
+    guard durationSec > 0 else { return 0 }
+    return min(max(progressSec / durationSec, 0), 1)
+  }
+
+  /// 剩余秒数（卡片「剩 mm:ss」徽标）。
+  var remainingSec: Double {
+    return max(durationSec - progressSec, 0)
+  }
+}
+
 /// Singleton holding the scanned media library items, the persisted index, and query helpers
 /// (filtering, continue-watching, TV-show episodes).
 ///
@@ -114,6 +155,9 @@ final class MediaLibraryStore: NSObject {
   private var pendingRescan: Bool = false
   /// P3 seam：记录反序列化完成线程（红队 P3.1 断言 isMainThread == false）。
   internal var __test_lastIndexLoadThread: Thread?
+  /// A.2 seam：记录「继续观看」后台计算线程（红队断言 isMainThread == false，验证后台化）。
+  /// 主线程写、后台捕获（与 `__test_lastIndexLoadThread` 同构，TSan 安全）。
+  internal var __test_lastContinueWatchingComputeThread: Thread?
 
   /// 测试隔离 seam（auto-fix）：禁 rescan 避免 hosted XCTest 构造 VC（viewDidLoad）时扫真 NAS
   /// （默认 rootPath 指向绿联 NAS 挂载点，rescan 异步完成会覆盖 setItemsForTesting）。
@@ -268,51 +312,100 @@ final class MediaLibraryStore: NSObject {
     return result
   }
 
-  /// Items with playback progress < 95% of duration, sorted by last-played, limited to 10.
-  /// Joins to `HistoryController` via `mpvMd5`.
+  /// Items with playback progress < 95% of duration, sorted by last-played, **deduped per TV show**,
+  /// limited to 10. Synchronous wrapper over `continueWatchingCandidates()` +
+  /// `continueWatchingEntries(from:)` for low-frequency callers (startup/scan `refresh()`).
   ///
   /// `played` is intentionally not consulted: `HistoryController.add` hardcodes `played=true` on
   /// every entry, so filtering on it would exclude the entire history.
   func continueWatchingItems() -> [MediaItem] {
+    return continueWatchingEntries(from: continueWatchingCandidates()).map { $0.item }
+  }
+
+  /// 主线程快照：遍历 `HistoryController` history（`$history.withLock` 安全取 copy），匹配每个
+  /// entry 到 `MediaItem`（`md5Index` 优先，降级全量扫描），预提取后台所需的值字段。
+  ///
+  /// 主线程契约：history 走 `@Atomic` 的 `withLock`（与 `save()` 同构），`items`/`md5Index` 主线程读。
+  /// var-来源字段（`entry.mpvProgress?.second`、`item.duration`）在此预提取为值类型，后台不再碰
+  /// `PlaybackHistory`/`MediaItem` 的可变属性，消除数据竞争。
+  func continueWatchingCandidates() -> [ContinueWatchingCandidate] {
     let ignorePath = currentIgnorePath()
-    let history = HistoryController.shared.history
-    var pairs: [(item: MediaItem, addedDate: Date)] = []
-    for entry in history {
-      // Match by URL first (most reliable), then by md5.
+    let historySnapshot: [PlaybackHistory] = HistoryController.shared.$history.withLock { $0 }
+    var out: [ContinueWatchingCandidate] = []
+    out.reserveCapacity(historySnapshot.count)
+    for entry in historySnapshot {
+      // Match by md5 first (cached), then by full scan.
       var matched: MediaItem? = md5Index[entry.mpvMd5]
       if matched == nil {
         matched = items.first { Utility.mpvWatchLaterMd5($0.url, ignorePath) == entry.mpvMd5 }
       }
       guard let item = matched else { continue }
-      // Duration guard.
+      // Duration guard（廉价，留主线程）。
       let durationSec: Double
       if let d = item.duration { durationSec = d }
       else if entry.duration.second > 0 { durationSec = entry.duration.second }
       else { continue }
-      // 修复 A4 / C2：读 watch-later 失败时 fallback 到 entry.mpvProgress?.second
-      // （IINA 自持久化的独立进度源，PlayerCore.savePlaybackPosition 回写）。
-      // 这覆盖 mpv 写 watch-later 失败的场景（NAS I/O 时序 / pos=NOPTS）：
-      // 旧实现无 fallback 导致"继续观看"入口错误消失。
-      guard let progressSec = progressSec(for: entry), progressSec > 0 else { continue }
-      if progressSec >= durationSec * MediaLibraryStore.watchedThreshold { continue }
-      pairs.append((item: item, addedDate: entry.addedDate))
+      out.append(ContinueWatchingCandidate(
+        mpvMd5: entry.mpvMd5,
+        item: item,
+        tvShowId: item.tvShowId,
+        urlPath: item.url.path,
+        addedDate: entry.addedDate,
+        durationSec: durationSec,
+        episodeNumber: item.episodeNumber,
+        cleanedName: item.cleanedName,
+        fallbackProgressSec: entry.mpvProgress?.second
+      ))
     }
-    pairs.sort { $0.addedDate > $1.addedDate }
-    return Array(pairs.prefix(MediaLibraryStore.continueWatchingLimit)).map { $0.item }
+    return out
   }
 
-  /// 修复 A4 / C2：统一的进度读取 helper（watch-later 优先，fallback 到 entry.mpvProgress）。
+  /// 后台纯函数：对每个 candidate 读 watch-later（`playbackProgressFromWatchLater` 优先，
+  /// `fallbackProgressSec` 回退）→ 过滤 `progressSec>0` 与 watchedThreshold → 按 `tvShowId`
+  /// 聚合去重（同剧只留 addedDate 最新且合法的代表）→ 按 addedDate 降序 → 截断到
+  /// `continueWatchingLimit` → 组装 `displayName`。
   ///
-  /// 读取顺序：
-  ///   1. `Utility.playbackProgressFromWatchLater(mpvMd5)`（live 值，反映最新播放）。
-  ///   2. nil 时 fallback `entry.mpvProgress?.second`（IINA 自持久化的独立进度源）。
-  ///
-  /// fallback 值仍需过调用方的 watchedThreshold / progress>0 guard（不在 helper 内判定）。
-  private func progressSec(for entry: PlaybackHistory) -> Double? {
-    if let live = Utility.playbackProgressFromWatchLater(entry.mpvMd5)?.second {
-      return live
+  /// 无主线程依赖（watch-later 读是纯文件 IO，candidates 是值类型快照），可后台、可单测。
+  /// 进度读取顺序与 `progress(for:)` 一致（watch-later 优先 + mpvProgress 回退），保持一致性契约。
+  func continueWatchingEntries(from candidates: [ContinueWatchingCandidate]) -> [ContinueWatchingEntry] {
+    // dedupeKey → (candidate, progressSec)，存「该 key 内 addedDate 最新且合法」的代表。
+    var bestByKey: [String: (candidate: ContinueWatchingCandidate, progressSec: Double)] = [:]
+    for cand in candidates {
+      var progressSec: Double? = Utility.playbackProgressFromWatchLater(cand.mpvMd5)?.second
+      if progressSec == nil { progressSec = cand.fallbackProgressSec }
+      guard let p = progressSec, p > 0 else { continue }
+      if p >= cand.durationSec * MediaLibraryStore.watchedThreshold { continue }
+      // dedupeKey：剧集按 tvShowId（同剧多集合并为单入口），单文件按自身路径（各自独立）。
+      let key = cand.tvShowId ?? cand.urlPath
+      if let existing = bestByKey[key] {
+        if cand.addedDate > existing.candidate.addedDate {
+          bestByKey[key] = (cand, p)
+        }
+      } else {
+        bestByKey[key] = (cand, p)
+      }
     }
-    return entry.mpvProgress?.second
+    let sorted = bestByKey.values.sorted { $0.candidate.addedDate > $1.candidate.addedDate }
+    return Array(sorted.prefix(MediaLibraryStore.continueWatchingLimit)).map { pair in
+      ContinueWatchingEntry(
+        item: pair.candidate.item,
+        progressSec: pair.progressSec,
+        durationSec: pair.candidate.durationSec,
+        displayName: MediaLibraryStore.continueWatchingDisplayName(for: pair.candidate)
+      )
+    }
+  }
+
+  /// 组装卡片显示名：剧集 = 「剧名 · 第N集」（无集数则仅剧名），电影/单文件 = cleanedName。
+  /// 后台预算（廉价字符串拼接），零主线程成本。
+  private static func continueWatchingDisplayName(for cand: ContinueWatchingCandidate) -> String {
+    if let show = cand.tvShowId {
+      if let ep = cand.episodeNumber {
+        return "\(show) · 第\(ep)集"
+      }
+      return show
+    }
+    return cand.cleanedName
   }
 
   /// All episodes of a TV show, sorted by episode number.
